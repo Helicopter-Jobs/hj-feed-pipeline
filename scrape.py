@@ -27,7 +27,7 @@ USER_AGENT = (
 BROWSER_TIMEOUT_MS = 45_000
 
 # TEST MODE: keep this at 1 until you see items in feed.xml
-MAX_JOB_LINKS_PER_SOURCE = 1
+MAX_JOB_LINKS_PER_SOURCE = 5
 MAX_TEXT_CHARS_TO_LLM = 20000
 
 CATEGORY_ENUM = ["Pilot", "Maintenance", "Medical", "Dispatch", "Operations", "Other"]
