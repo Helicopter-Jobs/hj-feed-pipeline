@@ -4,7 +4,7 @@ import time
 import json
 import html
 from datetime import datetime, timezone
-from typing import Dict, List
+from typing import Dict, List, Optional
 from urllib.parse import urljoin
 
 import requests
@@ -25,8 +25,10 @@ USER_AGENT = (
 )
 
 BROWSER_TIMEOUT_MS = 45_000
-MAX_JOB_LINKS_PER_SOURCE = 5
-MAX_TEXT_CHARS_TO_LLM = 25000
+
+# TEST MODE: keep this at 1 until you see items in feed.xml
+MAX_JOB_LINKS_PER_SOURCE = 1
+MAX_TEXT_CHARS_TO_LLM = 20000
 
 CATEGORY_ENUM = ["Pilot", "Maintenance", "Medical", "Dispatch", "Operations", "Other"]
 
@@ -81,10 +83,35 @@ def openai_post_with_backoff(payload: dict, timeout_s: int) -> dict:
             continue
         resp.raise_for_status()
         return resp.json()
-    raise RuntimeError("OpenAI rate limited too long (429). Try later.")
+    # Fail soft: return empty output so we skip job instead of crashing the run
+    return {"output": [{"content": [{"type": "output_text", "text": ""}]}]}
 
 
-def openai_extract_job(source_url: str, raw_text: str) -> Dict:
+def extract_output_text(data: dict) -> str:
+    text_out = ""
+    for item in data.get("output", []):
+        for c in item.get("content", []):
+            if c.get("type") == "output_text":
+                text_out += c.get("text", "")
+    return (text_out or "").strip()
+
+
+def safe_json_load(s: str) -> Optional[dict]:
+    s = (s or "").strip()
+    if not s:
+        return None
+    # If model wrapped JSON in extra text, extract first {...}
+    start = s.find("{")
+    end = s.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        s = s[start : end + 1]
+    try:
+        return json.loads(s)
+    except Exception:
+        return None
+
+
+def openai_extract_job(source_url: str, raw_text: str) -> Optional[Dict]:
     instructions = f"""
 Return ONLY valid JSON with these keys:
 title (string),
@@ -118,25 +145,19 @@ Rules:
     }
 
     data = openai_post_with_backoff(payload, timeout_s=90)
+    text_out = extract_output_text(data)
+    job = safe_json_load(text_out)
 
-    text_out = ""
-    for item in data.get("output", []):
-        for c in item.get("content", []):
-            if c.get("type") == "output_text":
-                text_out += c.get("text", "")
-    text_out = text_out.strip()
-
-    try:
-        job = json.loads(text_out)
-    except Exception:
+    if job is None:
+        # Fallback once with stronger model
         payload["model"] = "gpt-4o"
         data2 = openai_post_with_backoff(payload, timeout_s=120)
-        text2 = ""
-        for item in data2.get("output", []):
-            for c in item.get("content", []):
-                if c.get("type") == "output_text":
-                    text2 += c.get("text", "")
-        job = json.loads(text2.strip())
+        text2 = extract_output_text(data2)
+        job = safe_json_load(text2)
+
+    if job is None:
+        print("OpenAI returned non-JSON/empty output for:", source_url)
+        return None
 
     # enforce
     job["employer"] = EMPLOYER
@@ -158,10 +179,8 @@ Rules:
 
 def is_heliservice_job_link(url: str) -> bool:
     u = url.lower()
-    # HeliService uses /de?id=xxxx style job pages; keep those
-    if "jobs.heliservice.de" in u and "id=" in u:
-        return True
-    return False
+    # HeliService uses /de?id=xxxx style pages
+    return "jobs.heliservice.de" in u and "id=" in u
 
 
 def collect_job_links(listing_url: str, listing_html: str) -> List[str]:
@@ -235,7 +254,8 @@ def main():
     listing_url = sources[0]
     print(f"Listing: {listing_url}")
 
-    jobs = []
+    jobs: List[Dict] = []
+
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(user_agent=USER_AGENT)
@@ -255,6 +275,8 @@ def main():
             if len(raw_text) < 200:
                 continue
             job = openai_extract_job(job_url, raw_text)
+            if not job:
+                continue
             jobs.append(job)
             print(f"+ {job.get('title','(no title)')[:90]}")
 
