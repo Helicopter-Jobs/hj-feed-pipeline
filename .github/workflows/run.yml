@@ -35,11 +35,12 @@ jobs:
           pip install playwright beautifulsoup4 lxml requests pdfminer.six
           python -m playwright install --with-deps chromium
 
-      - name: Build feed.xml
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        run: |
-          python scrape.py
+      - name: Build feed.xml (easy)
+  env:
+    OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+    SOURCES_FILE: sources_easy.txt
+  run: |
+    python scrape.py
 
       - name: Commit updated feed.xml
         run: |
