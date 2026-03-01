@@ -20,7 +20,6 @@ OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "").strip()
 if not OPENAI_API_KEY:
     raise SystemExit("Missing OPENAI_API_KEY (GitHub repo → Settings → Secrets and variables → Actions).")
 
-# Workflow sets SOURCES_FILE to sources_easy.txt or sources_hard.txt
 SOURCES_FILE = os.environ.get("SOURCES_FILE", "sources_easy.txt")
 
 OUT_XML = "feed.xml"
@@ -88,8 +87,7 @@ def normalize_space(s: str) -> str:
 
 def domain_from_url(url: str) -> str:
     try:
-        host = urlparse(url).netloc.lower().replace("www.", "")
-        return host
+        return urlparse(url).netloc.lower().replace("www.", "")
     except Exception:
         return ""
 
@@ -110,7 +108,6 @@ def read_sources() -> List[str]:
 
     lines = [ln.strip() for ln in raw.splitlines() if ln.strip() and not ln.strip().startswith("#")]
     urls: List[str] = []
-
     for ln in lines:
         if "http" in ln and " " in ln:
             for p in ln.split():
@@ -119,7 +116,6 @@ def read_sources() -> List[str]:
         else:
             urls.append(ln)
 
-    # unique preserve order
     seen = set()
     out = []
     for u in urls:
@@ -133,8 +129,7 @@ def extract_text_from_html(html_content: str) -> str:
     soup = BeautifulSoup(html_content, "lxml")
     for tag in soup(["script", "style", "noscript", "svg", "canvas"]):
         tag.decompose()
-    text = soup.get_text("\n")
-    return normalize_space(text)[:MAX_TEXT_CHARS_TO_LLM]
+    return normalize_space(soup.get_text("\n"))[:MAX_TEXT_CHARS_TO_LLM]
 
 
 def fetch_pdf_text(url: str) -> str:
@@ -194,22 +189,25 @@ def is_likely_job_link(url: str) -> bool:
     if any(w in u for w in BAD_WORDS):
         return False
 
+    # iCIMS: ONLY real job detail URLs, NEVER the search/listing page
     if "icims.com" in u:
-    # Reject listing/search pages
-    if "/jobs/search" in u or "searchkeyword=" in u or "#icims_content_iframe" in u:
-        return False
-    # Accept only true job detail URLs like .../jobs/12345/.../job
-    return bool(re.search(r"/jobs/\d+/.+/job", u))
+        if "/jobs/search" in u or "searchkeyword=" in u or "#icims_content_iframe" in u:
+            return False
+        return bool(re.search(r"/jobs/\d+/.+/job", u))
 
+    # Workday: only job detail pages
     if "myworkdayjobs.com" in u:
         return "/job/" in u
 
+    # Jobtoolz: job pages are /en/<slug>
     if "jobtoolz.com" in u:
         return "/en/" in u and "cookie" not in u and "privacy" not in u
 
+    # HeliService: /de?id=...
     if "jobs.heliservice.de" in u:
         return "id=" in u
 
+    # Known ATS: keep as last resort
     if any(h in u for h in ATS_HINTS):
         return True
 
@@ -219,7 +217,6 @@ def is_likely_job_link(url: str) -> bool:
 def collect_job_links_from_page(base_url: str, html_content: str) -> List[str]:
     soup = BeautifulSoup(html_content, "lxml")
     links: List[str] = []
-
     for a in soup.find_all("a", href=True):
         href = (a.get("href") or "").strip()
         if not href:
@@ -228,7 +225,6 @@ def collect_job_links_from_page(base_url: str, html_content: str) -> List[str]:
         if is_likely_job_link(full):
             links.append(full)
 
-    # unique preserve order
     seen = set()
     out = []
     for l in links:
@@ -258,7 +254,6 @@ def openai_post_with_backoff(payload: dict, timeout_s: int) -> dict:
             continue
         resp.raise_for_status()
         return resp.json()
-
     return {"output": [{"content": [{"type": "output_text", "text": ""}]}]}
 
 
@@ -286,18 +281,18 @@ salary_line (string or empty)
 Rules:
 - Do NOT guess. Use only the provided text.
 - employer MUST be exactly: "{employer}"
+- title must be the actual job title (not empty).
 - location: if stated, use it; else "Not specified".
 - remote: true only if explicitly stated Remote/Hybrid/Telecommute; else false.
 - apply_url: use a clear apply link if present; otherwise use source_url.
-- salary_line:
-  - Only if pay is explicitly stated. Otherwise return "".
-- description: clean plain text, keep bullets; no HTML.
+- salary_line: only if pay is explicitly stated, otherwise "".
+- description: clean plain text; must not be empty.
 """
 
     payload = {
         "model": "gpt-4o-mini",
         "input": [
-            {"role": "system", "content": "Extract structured job fields for a helicopter job board. Be precise; do not guess."},
+            {"role": "system", "content": "Extract structured job fields for a helicopter job board. Output ONLY JSON."},
             {"role": "user", "content": f"source_url: {source_url}\n\n{instructions}\n\nJOB PAGE TEXT:\n{raw_text}"},
         ],
         "temperature": 0.0,
@@ -315,7 +310,6 @@ Rules:
         print("OpenAI returned non-JSON/empty output for:", source_url)
         return None
 
-    # enforce
     job["employer"] = employer
     job["source_url"] = source_url
     job["guid"] = source_url
@@ -331,6 +325,24 @@ Rules:
         job["apply_url"] = source_url
 
     return job
+
+
+# =====================
+# JOB VALIDATION / STORE SCRUB
+# =====================
+def is_valid_job(job: Dict) -> bool:
+    title = (job.get("title") or "").strip()
+    desc = (job.get("description") or "").strip()
+    link = (job.get("apply_url") or job.get("source_url") or "").lower()
+
+    if not title:
+        return False
+    if len(desc) < 80:
+        return False
+    # Block iCIMS listing/search URLs as "jobs"
+    if "icims.com" in link and ("/jobs/search" in link or "searchkeyword=" in link or "#icims_content_iframe" in link):
+        return False
+    return True
 
 
 # =====================
@@ -363,6 +375,17 @@ def prune_store(store: Dict[str, Dict]) -> Dict[str, Dict]:
     return out
 
 
+def scrub_store(store: Dict[str, Dict]) -> Dict[str, Dict]:
+    cleaned = {}
+    for guid, job in store.items():
+        if not job.get("apply_url"):
+            job["apply_url"] = job.get("source_url", guid)
+        if not is_valid_job(job):
+            continue
+        cleaned[guid] = job
+    return cleaned
+
+
 def upsert_jobs(store: Dict[str, Dict], new_jobs: List[Dict]) -> Dict[str, Dict]:
     now = utc_now_iso()
     for j in new_jobs:
@@ -371,7 +394,6 @@ def upsert_jobs(store: Dict[str, Dict], new_jobs: List[Dict]) -> Dict[str, Dict]
             continue
 
         if guid in store:
-            # update existing
             existing = store[guid]
             existing.update(j)
             existing["last_seen"] = now
@@ -446,8 +468,7 @@ def main():
         page = context.new_page()
 
         for src in sources:
-            dom = domain_from_url(src)
-            employer = employer_for_domain(dom)
+            employer = employer_for_domain(domain_from_url(src))
             print(f"\nSOURCE: {src}")
             print(f"Employer: {employer}")
 
@@ -461,7 +482,6 @@ def main():
 
             links = collect_job_links_from_page(src, listing_html)
             print(f"  Found {len(links)} candidate job links")
-
             if not links:
                 links = [src]
 
@@ -486,6 +506,9 @@ def main():
                     job = openai_extract_job(source_url, raw_text, employer)
                     if not job:
                         continue
+                    if not is_valid_job(job):
+                        print("   - Skipped invalid job:", source_url)
+                        continue
 
                     new_jobs.append(job)
                     print(f"   + {job.get('title','(no title)')[:90]}")
@@ -495,13 +518,12 @@ def main():
 
         browser.close()
 
-    # Merge into store
     store = load_store()
     store = upsert_jobs(store, new_jobs)
+    store = scrub_store(store)   # remove junk already stored
     store = prune_store(store)
     save_store(store)
 
-    # Build feed from store
     items = list(store.values())
     xml = build_feed(items)
     with open(OUT_XML, "w", encoding="utf-8") as f:
