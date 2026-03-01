@@ -16,7 +16,7 @@ OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "").strip()
 if not OPENAI_API_KEY:
     raise SystemExit("Missing OPENAI_API_KEY (GitHub repo → Settings → Secrets and variables → Actions).")
 
-SOURCES_FILE = "sources.txt"
+SOURCES_FILE = "sources_easy.txt"
 OUT_XML = "feed.xml"
 
 USER_AGENT = (
