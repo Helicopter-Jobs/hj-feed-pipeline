@@ -13,16 +13,13 @@ from playwright.sync_api import sync_playwright
 from pdfminer.high_level import extract_text as pdf_extract_text
 
 
-# =====================
-# REQUIRED CONFIG
-# =====================
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "").strip()
 if not OPENAI_API_KEY:
     raise SystemExit("Missing OPENAI_API_KEY (GitHub repo → Settings → Secrets and variables → Actions).")
 
 SOURCES_FILE = os.environ.get("SOURCES_FILE", "sources_easy.txt")
 OUT_XML = "feed.xml"
-STATE_JSON = "jobs.json"  # master merged job store
+STATE_JSON = "jobs.json"
 
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -30,14 +27,11 @@ USER_AGENT = (
 )
 
 BROWSER_TIMEOUT_MS = 45_000
-
-# Override per workflow if needed (recommended):
 MAX_JOB_LINKS_PER_SOURCE = int(os.environ.get("MAX_JOB_LINKS_PER_SOURCE", "15"))
 MAX_TEXT_CHARS_TO_LLM = int(os.environ.get("MAX_TEXT_CHARS_TO_LLM", "18000"))
 RETENTION_DAYS = int(os.environ.get("RETENTION_DAYS", "30"))
 
 CATEGORY_ENUM = ["Pilot", "Maintenance", "Medical", "Dispatch", "Operations", "Other"]
-JOBTYPE_ENUM = ["Full-time", "Part-time", "Contract", "Temporary", "Internship", "Rotation", "Other"]
 
 EMPLOYER_MAP = {
     "castleair.co.uk": "Castle Air Aviation",
@@ -61,10 +55,24 @@ ATS_HINTS = [
 
 PDF_EXT = ".pdf"
 
+# ===== Castle Air: block these PDFs =====
+PDF_BLOCK_HINTS = [
+    "modern-slavery",
+    "slavery",
+    "statement",
+    "policy",
+    "privacy",
+    "cookie",
+    "terms",
+    "map",
+    "base-map",
+    "liskeard",
+]
 
-# =====================
-# HELPERS
-# =====================
+# ===== Castle Air: job posts live under /careers/<slug>/ =====
+CASTLE_JOB_PATH_HINT = "/careers/"
+
+
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -103,7 +111,6 @@ def read_sources() -> List[str]:
     raw = open(SOURCES_FILE, "r", encoding="utf-8").read().strip()
     if not raw:
         raise SystemExit(f"{SOURCES_FILE} is empty.")
-
     lines = [ln.strip() for ln in raw.splitlines() if ln.strip() and not ln.strip().startswith("#")]
     urls: List[str] = []
     for ln in lines:
@@ -113,7 +120,6 @@ def read_sources() -> List[str]:
                     urls.append(p.strip())
         else:
             urls.append(ln)
-
     seen = set()
     out = []
     for u in urls:
@@ -162,126 +168,19 @@ def safe_json_load(s: str) -> Optional[dict]:
         return None
 
 
-# =====================
-# LIGHTWEIGHT NORMALIZERS (Automation polish)
-# =====================
-REMOTE_HINTS = [
-    "remote", "work from home", "telecommute", "telecommuting", "home-based",
-    "hybrid", "virtual", "fully remote"
-]
-
-ROTATION_HINTS = [
-    "14x14", "28x28", "21x21", "7 on", "7 off", "on/off", "rotation", "rotational"
-]
-
-COUNTRY_HINTS = [
-    "united states", "usa", "u.s.", "us", "canada", "united kingdom", "uk", "england",
-    "scotland", "wales", "ireland", "france", "germany", "netherlands", "belgium",
-    "denmark", "norway", "sweden", "poland", "brazil", "suriname", "australia",
-    "new zealand", "uae", "united arab emirates"
-]
-
-
-def normalize_remote(remote_value: bool, text: str) -> bool:
-    if remote_value is True:
-        return True
-    t = (text or "").lower()
-    return any(h in t for h in REMOTE_HINTS)
-
-
-def normalize_location(location: str, text: str) -> str:
-    loc = (location or "").strip()
-    if loc and loc.lower() != "not specified":
-        return loc
-
-    t = (text or "").lower()
-    for c in COUNTRY_HINTS:
-        if c in t:
-            # title-case basic countries; keep US as "United States"
-            if c in ("usa", "u.s.", "us"):
-                return "United States"
-            if c == "uk":
-                return "United Kingdom"
-            return c.title()
-    return "Not specified"
-
-
-def infer_job_type(title: str, desc: str) -> str:
-    t = f"{title}\n{desc}".lower()
-
-    if any(x in t for x in ["intern", "internship"]):
-        return "Internship"
-    if any(x in t for x in ["part-time", "part time"]):
-        return "Part-time"
-    if any(x in t for x in ["contract", "1099", "fixed term", "fixed-term"]):
-        return "Contract"
-    if any(x in t for x in ["temporary", "temp"]):
-        return "Temporary"
-    if any(x in t for x in ROTATION_HINTS):
-        return "Rotation"
-    if any(x in t for x in ["full-time", "full time"]):
-        return "Full-time"
-    # default
-    return "Other"
-
-
-def infer_category(title: str, desc: str) -> str:
-    t = f"{title}\n{desc}".lower()
-
-    # Pilot
-    if any(k in t for k in ["pilot", "captain", "co-pilot", "copilot", "sic", "pic", "first officer"]):
-        return "Pilot"
-
-    # Maintenance
-    if any(k in t for k in ["mechanic", "engineer", "avionics", "a&p", "a and p", "b1.3", "b2", "part-145", "maintenance"]):
-        return "Maintenance"
-
-    # Medical
-    if any(k in t for k in ["paramedic", "nurse", "rn", "flight nurse", "emt", "clinician", "medic"]):
-        return "Medical"
-
-    # Dispatch / Ops
-    if any(k in t for k in ["dispatcher", "dispatch"]):
-        return "Dispatch"
-
-    if any(k in t for k in ["operations", "ops", "ground operations", "flight operations", "coordinator", "coordination"]):
-        return "Operations"
-
-    return "Other"
-
-
-def format_description_for_jboard(desc: str) -> str:
-    """
-    Keeps it readable in JBoard:
-    - Converts newlines to <br/>
-    - Adds extra break before common headings
-    """
-    d = (desc or "").strip()
-    if not d:
-        return ""
-
-    # normalize bullet characters slightly
-    d = d.replace("•", "-").replace("·", "-")
-
-    # keep line breaks in JBoard
-    d = d.replace("\n", "<br/>")
-
-    # add breathing room before headings
-    for h in ["DUTIES", "RESPONSIBILITIES", "REQUIREMENTS", "QUALIFICATIONS", "SKILLS", "EXPERIENCE", "WHAT YOU’LL", "WHAT YOU'LL"]:
-        d = re.sub(rf"(<br/>)+\s*{h}", r"<br/><br/>" + h, d, flags=re.IGNORECASE)
-
-    return d
-
-
-# =====================
-# LINK FILTERING
-# =====================
 BAD_WORDS = [
     "privacy", "cookie", "legal", "terms", "accessibility", "sustainability",
     "diversity", "community", "stories", "leadership", "culture", "history",
     "capabilities", "companies", "supplier", "veteran", "internship-program",
     "pay-benefits", "press", "news", "blog"
 ]
+
+
+def is_bad_pdf(url: str) -> bool:
+    u = (url or "").lower()
+    if not u.endswith(PDF_EXT):
+        return False
+    return any(h in u for h in PDF_BLOCK_HINTS)
 
 
 def is_likely_job_link(url: str) -> bool:
@@ -292,27 +191,37 @@ def is_likely_job_link(url: str) -> bool:
     if u.endswith("#") or "#content" in u:
         return False
 
+    # Block known non-job PDFs (Castle Air policies, maps, etc.)
     if u.endswith(PDF_EXT):
+        if is_bad_pdf(u):
+            return False
+        # Otherwise allow PDFs (some employers post jobs as PDFs)
         return True
 
     if any(w in u for w in BAD_WORDS):
         return False
 
-    # iCIMS: ONLY job detail pages
+    # Castle Air: allow ONLY /careers/<slug>/ pages (not generic /careers/ and not PDFs)
+    if "castleair.co.uk" in u:
+        if u.endswith("/careers/") or u.endswith("/careers"):
+            return False
+        return CASTLE_JOB_PATH_HINT in u
+
+    # iCIMS
     if "icims.com" in u:
         if "/jobs/search" in u or "searchkeyword=" in u or "#icims_content_iframe" in u:
             return False
         return bool(re.search(r"/jobs/\d+/.+/job", u))
 
-    # Workday: only job detail pages
+    # Workday
     if "myworkdayjobs.com" in u:
         return "/job/" in u
 
-    # Jobtoolz: /en/<slug> jobs
+    # Jobtoolz
     if "jobtoolz.com" in u:
         return "/en/" in u and "cookie" not in u and "privacy" not in u
 
-    # HeliService: /de?id=...
+    # HeliService
     if "jobs.heliservice.de" in u:
         return "id=" in u
 
@@ -344,9 +253,6 @@ def collect_job_links_from_page(base_url: str, html_content: str) -> List[str]:
     return out[:MAX_JOB_LINKS_PER_SOURCE]
 
 
-# =====================
-# OPENAI (fail-soft + backoff)
-# =====================
 def openai_post_with_backoff(payload: dict, timeout_s: int) -> dict:
     backoff = 5
     for attempt in range(1, 8):
@@ -384,7 +290,6 @@ location (string),
 remote (boolean),
 apply_url (string),
 category (one of {CATEGORY_ENUM}),
-job_type (one of {JOBTYPE_ENUM}),
 description (string),
 salary_line (string or empty)
 
@@ -421,16 +326,12 @@ Rules:
         print("OpenAI returned non-JSON/empty output for:", source_url)
         return None
 
-    # enforce base fields
     job["employer"] = employer
     job["source_url"] = source_url
     job["guid"] = source_url
 
-    # sanitize types
     if job.get("category") not in CATEGORY_ENUM:
         job["category"] = "Other"
-    if job.get("job_type") not in JOBTYPE_ENUM:
-        job["job_type"] = "Other"
     if not isinstance(job.get("remote"), bool):
         job["remote"] = False
 
@@ -439,21 +340,9 @@ Rules:
     if not job["apply_url"]:
         job["apply_url"] = source_url
 
-    # Automation polish: normalize/override to be consistent
-    job["remote"] = normalize_remote(job.get("remote", False), job.get("description", ""))
-    job["location"] = normalize_location(job.get("location", ""), job.get("description", ""))
-    job["category"] = infer_category(job.get("title", ""), job.get("description", ""))
-
-    # if model didn't set job_type well, infer it
-    if job.get("job_type") == "Other":
-        job["job_type"] = infer_job_type(job.get("title", ""), job.get("description", ""))
-
     return job
 
 
-# =====================
-# JOB VALIDATION / STORE SCRUB
-# =====================
 def is_valid_job(job: Dict) -> bool:
     title = (job.get("title") or "").strip()
     desc = (job.get("description") or "").strip()
@@ -463,14 +352,12 @@ def is_valid_job(job: Dict) -> bool:
         return False
     if len(desc) < 120:
         return False
-    if "icims.com" in link and ("/jobs/search" in link or "searchkeyword=" in link or "#icims_content_iframe" in link):
+    # Castle Air: never treat policy/map PDFs as jobs
+    if link.endswith(PDF_EXT) and is_bad_pdf(link):
         return False
     return True
 
 
-# =====================
-# MERGE STORE (jobs.json)
-# =====================
 def load_store() -> Dict[str, Dict]:
     if not os.path.exists(STATE_JSON):
         return {}
@@ -515,7 +402,6 @@ def upsert_jobs(store: Dict[str, Dict], new_jobs: List[Dict]) -> Dict[str, Dict]
         guid = (j.get("guid") or "").strip()
         if not guid:
             continue
-
         if guid in store:
             existing = store[guid]
             existing.update(j)
@@ -528,9 +414,6 @@ def upsert_jobs(store: Dict[str, Dict], new_jobs: List[Dict]) -> Dict[str, Dict]
     return store
 
 
-# =====================
-# RSS OUTPUT
-# =====================
 def build_feed(items: List[Dict]) -> str:
     pubdate = rfc2822_now()
     out: List[str] = []
@@ -541,14 +424,7 @@ def build_feed(items: List[Dict]) -> str:
     out.append("    <link>https://helicopter-jobs.com</link>")
     out.append("    <description>Direct-employer helicopter jobs</description>")
 
-    # Sort by most recently seen first (polish)
-    def sort_key(j: Dict):
-        dt = parse_iso(j.get("last_seen", "")) or parse_iso(j.get("first_seen", "")) or datetime(1970, 1, 1, tzinfo=timezone.utc)
-        return dt
-
-    items_sorted = sorted(items, key=sort_key, reverse=True)
-
-    for j in items_sorted:
+    for j in items:
         title = rss_escape(j.get("title", ""))
         employer = rss_escape(j.get("employer", ""))
         link = rss_escape(j.get("apply_url", j.get("source_url", "")))
@@ -560,8 +436,7 @@ def build_feed(items: List[Dict]) -> str:
         desc = (j.get("description") or "").strip()
         if j.get("salary_line"):
             desc = f"{j['salary_line']}\n\n{desc}".strip()
-
-        desc_html = format_description_for_jboard(desc)
+        desc_html = desc.replace("\n", "<br/>")
 
         out.append("    <item>")
         out.append(f"      <title>{title}</title>")
@@ -572,8 +447,6 @@ def build_feed(items: List[Dict]) -> str:
         out.append(f"      <category>{category}</category>")
         out.append(f"      <location>{location}</location>")
         out.append(f"      <remote>{remote}</remote>")
-        # job_type is extra metadata; JBoard may ignore it (safe)
-        out.append(f"      <job_type>{rss_escape(j.get('job_type','Other'))}</job_type>")
         out.append("      <description><![CDATA[")
         out.append(desc_html)
         out.append("]]></description>")
@@ -584,9 +457,6 @@ def build_feed(items: List[Dict]) -> str:
     return "\n".join(out)
 
 
-# =====================
-# MAIN
-# =====================
 def main():
     sources = read_sources()
     print(f"Using sources file: {SOURCES_FILE}")
@@ -626,6 +496,9 @@ def main():
 
                 try:
                     if job_url.lower().endswith(PDF_EXT):
+                        # extra safety: skip bad PDFs
+                        if is_bad_pdf(job_url):
+                            continue
                         raw_text = fetch_pdf_text(job_url)
                         source_url = job_url
                     else:
