@@ -58,11 +58,9 @@ ATS_HINTS = [
 
 PDF_EXT = ".pdf"
 
-
 # =====================
 # HARDENING RULES
 # =====================
-# 1) Global PDF blocklist (prevents policies/maps/handbooks being treated as jobs)
 PDF_BLOCK_HINTS = [
     "modern-slavery",
     "slavery",
@@ -79,14 +77,12 @@ PDF_BLOCK_HINTS = [
     "environment",
 ]
 
-# 2) Jobtoolz has /pdf job-summary endpoints; block to avoid duplicates
+CASTLE_JOB_PATH_HINT = "/careers/"
+
+
 def is_jobtoolz_pdf(u: str) -> bool:
     u = (u or "").lower()
     return "jobtoolz.com" in u and u.endswith("/pdf")
-
-
-# 3) Castle Air job posts are WordPress pages under /careers/<slug>/
-CASTLE_JOB_PATH_HINT = "/careers/"
 
 
 # =====================
@@ -133,7 +129,6 @@ def read_sources() -> List[str]:
 
     lines = [ln.strip() for ln in raw.splitlines() if ln.strip() and not ln.strip().startswith("#")]
 
-    # allow accidental multiple URLs on one line
     urls: List[str] = []
     for ln in lines:
         if "http" in ln and " " in ln:
@@ -192,12 +187,21 @@ def safe_json_load(s: str) -> Optional[dict]:
 
 
 def is_http_url(u: str) -> bool:
-    # Blocks chrome-extension://, mailto:, tel:, javascript:
     try:
         scheme = urlparse(u).scheme.lower()
         return scheme in ("http", "https")
     except Exception:
         return False
+
+
+def strip_tracking(url: str) -> str:
+    # Keeps guids stable by removing query/fragment tracking params
+    try:
+        p = urlparse(url)
+        clean = f"{p.scheme}://{p.netloc}{p.path}"
+        return clean.rstrip("/")
+    except Exception:
+        return (url or "").split("?")[0].split("#")[0].rstrip("/")
 
 
 def is_bad_pdf(u: str) -> bool:
@@ -235,42 +239,34 @@ def is_likely_job_link(url: str) -> bool:
 
     ul = u.lower()
 
-    # jobtoolz /pdf summary endpoints cause duplicates
     if is_jobtoolz_pdf(ul):
         return False
 
     if ul.endswith(PDF_EXT):
-        # allow PDF jobs, but block known non-job PDFs globally
         return not is_bad_pdf(ul)
 
     if any(w in ul for w in BAD_WORDS):
         return False
 
-    # Castle Air: allow only /careers/<slug>/ job pages (not /careers/ itself)
     if "castleair.co.uk" in ul:
         if ul.rstrip("/").endswith("/careers"):
             return False
         return (CASTLE_JOB_PATH_HINT in ul)
 
-    # iCIMS: ONLY job detail pages, NEVER /jobs/search or iframe hashes
     if "icims.com" in ul:
         if "/jobs/search" in ul or "searchkeyword=" in ul or "#icims_content_iframe" in ul:
             return False
         return bool(re.search(r"/jobs/\d+/.+/job", ul))
 
-    # Workday: only /job/ detail pages
     if "myworkdayjobs.com" in ul:
         return "/job/" in ul
 
-    # Jobtoolz: /en/<slug> jobs (excluding cookie/privacy)
     if "jobtoolz.com" in ul:
         return ("/en/" in ul) and ("cookie" not in ul) and ("privacy" not in ul)
 
-    # HeliService: /de?id=...
     if "jobs.heliservice.de" in ul:
         return "id=" in ul
 
-    # Known ATS fallback
     if any(h in ul for h in ATS_HINTS):
         return True
 
@@ -285,11 +281,8 @@ def collect_job_links_from_page(base_url: str, html_content: str) -> List[str]:
         if not href:
             continue
         full = urljoin(base_url, href)
-
-        # HARDENING: ignore non-http(s) hrefs even if urljoin created them strangely
         if not is_http_url(full):
             continue
-
         if is_likely_job_link(full):
             links.append(full)
 
@@ -394,6 +387,59 @@ Rules:
         job["apply_url"] = source_url
 
     return job
+
+
+# =====================
+# HP HELICOPTERS SINGLE-PAGE MULTI-JOB HANDLER
+# =====================
+def extract_hp_jobs_from_careers_page(listing_url: str, listing_html: str, employer: str) -> List[Dict]:
+    """
+    HP Helicopters careers is a single page with multiple roles; create 1 job per detected title-like line.
+    """
+    soup = BeautifulSoup(listing_html, "lxml")
+    page_text = normalize_space(soup.get_text("\n"))
+
+    # Detect likely job titles from lines containing role keywords
+    lines = [ln.strip() for ln in page_text.split("\n") if ln.strip()]
+    candidates: List[str] = []
+    for ln in lines:
+        l = ln.lower()
+        if any(k in l for k in ["pilot", "mechanic", "chief pilot", "utility"]):
+            if l in ("job opportunities", "apply now", "careers", "join our team", "job opportunity", "job openings"):
+                continue
+            if 5 <= len(ln) <= 120:
+                candidates.append(ln)
+
+    # De-dupe preserve order
+    seen = set()
+    titles: List[str] = []
+    for t in candidates:
+        if t not in seen:
+            seen.add(t)
+            titles.append(t)
+
+    if not titles:
+        return []
+
+    base = strip_tracking(listing_url)
+    jobs: List[Dict] = []
+    for t in titles:
+        focused_text = f"FOCUS JOB TITLE: {t}\n\nPAGE TEXT:\n{page_text}"
+        job = openai_extract_job(source_url=base, raw_text=focused_text, employer=employer)
+        if not job:
+            continue
+
+        # Force a stable per-role guid so JBoard gets separate jobs
+        slug = re.sub(r"[^a-z0-9]+", "-", t.lower()).strip("-")[:80]
+        job["title"] = t
+        job["apply_url"] = base
+        job["guid"] = f"{base}#{slug}"
+        job["source_url"] = job["guid"]
+
+        if is_valid_job(job):
+            jobs.append(job)
+
+    return jobs
 
 
 # =====================
@@ -537,6 +583,7 @@ def main():
 
         for src in sources:
             employer = employer_for_domain(domain_from_url(src))
+            dom = domain_from_url(src)
             print(f"\nSOURCE: {src}")
             print(f"Employer: {employer}")
 
@@ -546,6 +593,15 @@ def main():
                 listing_html = page.content()
             except Exception as e:
                 print(f"  Failed to load listing page: {e}")
+                continue
+
+            # HP Helicopters special-case: one page, multiple roles, no job detail links
+            if "hphelicopters.com" in dom and "/careers" in src:
+                hp_jobs = extract_hp_jobs_from_careers_page(src, listing_html, employer)
+                print(f"  HP special-case: extracted {len(hp_jobs)} jobs from single page")
+                for j in hp_jobs:
+                    new_jobs.append(j)
+                    print(f"   + {j.get('title','(no title)')[:90]}")
                 continue
 
             links = collect_job_links_from_page(src, listing_html)
@@ -558,13 +614,11 @@ def main():
                     continue
                 seen_job_urls.add(job_url)
 
-                # HARDENING: never process non-http(s)
                 if not is_http_url(job_url):
                     continue
 
                 try:
                     if job_url.lower().endswith(PDF_EXT):
-                        # HARDENING: skip known non-job PDFs
                         if is_bad_pdf(job_url):
                             continue
                         raw_text = fetch_pdf_text(job_url)
