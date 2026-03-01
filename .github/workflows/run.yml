@@ -3,7 +3,7 @@ name: Build JBoard XML feed (Test - 1 source)
 on:
   workflow_dispatch:
   schedule:
-    - cron: "15 10 * * *" # daily at 10:15 UTC (~2:15am PT)
+    - cron: "15 10 */3 * *" # every 3 days at 10:15 UTC (~2:15am PT)
 
 permissions:
   contents: write
