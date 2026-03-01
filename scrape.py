@@ -3,7 +3,7 @@ import re
 import time
 import json
 import html
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional, Set
 from urllib.parse import urlparse, urljoin
 
@@ -20,10 +20,11 @@ OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "").strip()
 if not OPENAI_API_KEY:
     raise SystemExit("Missing OPENAI_API_KEY (GitHub repo → Settings → Secrets and variables → Actions).")
 
-# IMPORTANT: workflow sets SOURCES_FILE to sources_easy.txt or sources_hard.txt
+# Workflow sets SOURCES_FILE to sources_easy.txt or sources_hard.txt
 SOURCES_FILE = os.environ.get("SOURCES_FILE", "sources_easy.txt")
 
 OUT_XML = "feed.xml"
+STATE_JSON = "jobs.json"  # master merged job store
 
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -32,13 +33,15 @@ USER_AGENT = (
 
 BROWSER_TIMEOUT_MS = 45_000
 
-# Keep these conservative to avoid timeouts + rate limits
+# Conservative defaults: override per workflow if needed
 MAX_JOB_LINKS_PER_SOURCE = int(os.environ.get("MAX_JOB_LINKS_PER_SOURCE", "15"))
 MAX_TEXT_CHARS_TO_LLM = int(os.environ.get("MAX_TEXT_CHARS_TO_LLM", "20000"))
 
+# Keep feed/store lean and aligned with your JBoard expiry
+RETENTION_DAYS = int(os.environ.get("RETENTION_DAYS", "30"))
+
 CATEGORY_ENUM = ["Pilot", "Maintenance", "Medical", "Dispatch", "Operations", "Other"]
 
-# Your exact employer names:
 EMPLOYER_MAP = {
     "castleair.co.uk": "Castle Air Aviation",
     "jobs.heliservice.de": "HeliService",
@@ -65,6 +68,17 @@ PDF_EXT = ".pdf"
 # =====================
 # HELPERS
 # =====================
+def utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def parse_iso(dt: str) -> Optional[datetime]:
+    try:
+        return datetime.fromisoformat(dt.replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
 def normalize_space(s: str) -> str:
     s = s.replace("\r\n", "\n").replace("\r", "\n")
     s = re.sub(r"[ \t]+", " ", s)
@@ -93,10 +107,10 @@ def read_sources() -> List[str]:
     raw = open(SOURCES_FILE, "r", encoding="utf-8").read().strip()
     if not raw:
         raise SystemExit(f"{SOURCES_FILE} is empty.")
-    lines = [ln.strip() for ln in raw.splitlines() if ln.strip() and not ln.strip().startswith("#")]
 
-    # If someone pasted multiple URLs in one line, split them
+    lines = [ln.strip() for ln in raw.splitlines() if ln.strip() and not ln.strip().startswith("#")]
     urls: List[str] = []
+
     for ln in lines:
         if "http" in ln and " " in ln:
             for p in ln.split():
@@ -156,7 +170,7 @@ def safe_json_load(s: str) -> Optional[dict]:
 
 
 # =====================
-# LINK FILTERING (critical)
+# LINK FILTERING
 # =====================
 BAD_WORDS = [
     "privacy", "cookie", "legal", "terms", "accessibility", "sustainability",
@@ -180,33 +194,28 @@ def is_likely_job_link(url: str) -> bool:
     if any(w in u for w in BAD_WORDS):
         return False
 
-    # iCIMS: only real job detail pages
     if "icims.com" in u:
         return "/jobs/" in u and "/job" in u
 
-    # Workday: only job detail pages
     if "myworkdayjobs.com" in u:
         return "/job/" in u
 
-    # Jobtoolz: job pages are /en/<slug>
     if "jobtoolz.com" in u:
         return "/en/" in u and "cookie" not in u and "privacy" not in u
 
-    # HeliService: /de?id=...
     if "jobs.heliservice.de" in u:
         return "id=" in u
 
-    # Generic fallback: keep ATS-looking pages
     if any(h in u for h in ATS_HINTS):
         return True
 
-    # Otherwise ignore
     return False
 
 
 def collect_job_links_from_page(base_url: str, html_content: str) -> List[str]:
     soup = BeautifulSoup(html_content, "lxml")
     links: List[str] = []
+
     for a in soup.find_all("a", href=True):
         href = (a.get("href") or "").strip()
         if not href:
@@ -246,7 +255,6 @@ def openai_post_with_backoff(payload: dict, timeout_s: int) -> dict:
         resp.raise_for_status()
         return resp.json()
 
-    # fail-soft: return empty output
     return {"output": [{"content": [{"type": "output_text", "text": ""}]}]}
 
 
@@ -292,8 +300,7 @@ Rules:
     }
 
     data = openai_post_with_backoff(payload, timeout_s=90)
-    text_out = extract_output_text(data)
-    job = safe_json_load(text_out)
+    job = safe_json_load(extract_output_text(data))
 
     if job is None:
         payload["model"] = "gpt-4o"
@@ -320,6 +327,56 @@ Rules:
         job["apply_url"] = source_url
 
     return job
+
+
+# =====================
+# MERGE STORE (jobs.json)
+# =====================
+def load_store() -> Dict[str, Dict]:
+    if not os.path.exists(STATE_JSON):
+        return {}
+    try:
+        data = json.load(open(STATE_JSON, "r", encoding="utf-8"))
+        if isinstance(data, dict):
+            return data
+    except Exception:
+        pass
+    return {}
+
+
+def save_store(store: Dict[str, Dict]) -> None:
+    with open(STATE_JSON, "w", encoding="utf-8") as f:
+        json.dump(store, f, ensure_ascii=False, indent=2)
+
+
+def prune_store(store: Dict[str, Dict]) -> Dict[str, Dict]:
+    cutoff = datetime.now(timezone.utc) - timedelta(days=RETENTION_DAYS)
+    out = {}
+    for guid, job in store.items():
+        last_seen = parse_iso(job.get("last_seen", "")) or parse_iso(job.get("first_seen", ""))
+        if last_seen and last_seen >= cutoff:
+            out[guid] = job
+    return out
+
+
+def upsert_jobs(store: Dict[str, Dict], new_jobs: List[Dict]) -> Dict[str, Dict]:
+    now = utc_now_iso()
+    for j in new_jobs:
+        guid = (j.get("guid") or "").strip()
+        if not guid:
+            continue
+
+        if guid in store:
+            # update existing
+            existing = store[guid]
+            existing.update(j)
+            existing["last_seen"] = now
+            store[guid] = existing
+        else:
+            j["first_seen"] = now
+            j["last_seen"] = now
+            store[guid] = j
+    return store
 
 
 # =====================
@@ -374,8 +431,9 @@ def main():
     sources = read_sources()
     print(f"Using sources file: {SOURCES_FILE}")
     print(f"Loaded {len(sources)} sources")
+    print(f"MAX_JOB_LINKS_PER_SOURCE={MAX_JOB_LINKS_PER_SOURCE} RETENTION_DAYS={RETENTION_DAYS}")
 
-    jobs: List[Dict] = []
+    new_jobs: List[Dict] = []
     seen_job_urls: Set[str] = set()
 
     with sync_playwright() as p:
@@ -400,7 +458,6 @@ def main():
             links = collect_job_links_from_page(src, listing_html)
             print(f"  Found {len(links)} candidate job links")
 
-            # If we found none, treat the listing as a single page
             if not links:
                 links = [src]
 
@@ -425,7 +482,8 @@ def main():
                     job = openai_extract_job(source_url, raw_text, employer)
                     if not job:
                         continue
-                    jobs.append(job)
+
+                    new_jobs.append(job)
                     print(f"   + {job.get('title','(no title)')[:90]}")
                 except Exception as e:
                     print(f"   - Failed: {job_url} err: {str(e)[:160]}")
@@ -433,21 +491,20 @@ def main():
 
         browser.close()
 
-    # de-dupe by guid
-    uniq = []
-    seen = set()
-    for j in jobs:
-        g = (j.get("guid") or "").strip().lower()
-        if not g or g in seen:
-            continue
-        seen.add(g)
-        uniq.append(j)
+    # Merge into store
+    store = load_store()
+    store = upsert_jobs(store, new_jobs)
+    store = prune_store(store)
+    save_store(store)
 
-    xml = build_feed(uniq)
+    # Build feed from store
+    items = list(store.values())
+    xml = build_feed(items)
     with open(OUT_XML, "w", encoding="utf-8") as f:
         f.write(xml)
 
-    print(f"\nWrote {OUT_XML} with {len(uniq)} items")
+    print(f"\nMerged {len(new_jobs)} new jobs. Store now has {len(items)} jobs.")
+    print(f"Wrote {OUT_XML}")
 
 
 if __name__ == "__main__":
