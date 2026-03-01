@@ -13,13 +13,16 @@ from playwright.sync_api import sync_playwright
 from pdfminer.high_level import extract_text as pdf_extract_text
 
 
+# =====================
+# REQUIRED CONFIG
+# =====================
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "").strip()
 if not OPENAI_API_KEY:
     raise SystemExit("Missing OPENAI_API_KEY (GitHub repo → Settings → Secrets and variables → Actions).")
 
 SOURCES_FILE = os.environ.get("SOURCES_FILE", "sources_easy.txt")
 OUT_XML = "feed.xml"
-STATE_JSON = "jobs.json"
+STATE_JSON = "jobs.json"  # master merged store
 
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -55,7 +58,11 @@ ATS_HINTS = [
 
 PDF_EXT = ".pdf"
 
-# ===== Castle Air: block these PDFs =====
+
+# =====================
+# HARDENING RULES
+# =====================
+# 1) Global PDF blocklist (prevents policies/maps/handbooks being treated as jobs)
 PDF_BLOCK_HINTS = [
     "modern-slavery",
     "slavery",
@@ -67,12 +74,24 @@ PDF_BLOCK_HINTS = [
     "map",
     "base-map",
     "liskeard",
+    "handbook",
+    "safety-statement",
+    "environment",
 ]
 
-# ===== Castle Air: job posts live under /careers/<slug>/ =====
+# 2) Jobtoolz has /pdf job-summary endpoints; block to avoid duplicates
+def is_jobtoolz_pdf(u: str) -> bool:
+    u = (u or "").lower()
+    return "jobtoolz.com" in u and u.endswith("/pdf")
+
+
+# 3) Castle Air job posts are WordPress pages under /careers/<slug>/
 CASTLE_JOB_PATH_HINT = "/careers/"
 
 
+# =====================
+# HELPERS
+# =====================
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -111,7 +130,10 @@ def read_sources() -> List[str]:
     raw = open(SOURCES_FILE, "r", encoding="utf-8").read().strip()
     if not raw:
         raise SystemExit(f"{SOURCES_FILE} is empty.")
+
     lines = [ln.strip() for ln in raw.splitlines() if ln.strip() and not ln.strip().startswith("#")]
+
+    # allow accidental multiple URLs on one line
     urls: List[str] = []
     for ln in lines:
         if "http" in ln and " " in ln:
@@ -120,6 +142,7 @@ def read_sources() -> List[str]:
                     urls.append(p.strip())
         else:
             urls.append(ln)
+
     seen = set()
     out = []
     for u in urls:
@@ -168,6 +191,33 @@ def safe_json_load(s: str) -> Optional[dict]:
         return None
 
 
+def is_http_url(u: str) -> bool:
+    # Blocks chrome-extension://, mailto:, tel:, javascript:
+    try:
+        scheme = urlparse(u).scheme.lower()
+        return scheme in ("http", "https")
+    except Exception:
+        return False
+
+
+def is_bad_pdf(u: str) -> bool:
+    u = (u or "").lower()
+    if not u.endswith(PDF_EXT):
+        return False
+    return any(h in u for h in PDF_BLOCK_HINTS)
+
+
+def format_description_for_jboard(desc: str) -> str:
+    d = (desc or "").strip()
+    if not d:
+        return ""
+    d = d.replace("•", "-").replace("·", "-")
+    return d.replace("\n", "<br/>")
+
+
+# =====================
+# LINK FILTERING
+# =====================
 BAD_WORDS = [
     "privacy", "cookie", "legal", "terms", "accessibility", "sustainability",
     "diversity", "community", "stories", "leadership", "culture", "history",
@@ -176,57 +226,52 @@ BAD_WORDS = [
 ]
 
 
-def is_bad_pdf(url: str) -> bool:
-    u = (url or "").lower()
-    if not u.endswith(PDF_EXT):
-        return False
-    return any(h in u for h in PDF_BLOCK_HINTS)
-
-
 def is_likely_job_link(url: str) -> bool:
-    u = (url or "").strip().lower()
-
-    if u.startswith(("mailto:", "tel:", "javascript:")):
+    u = (url or "").strip()
+    if not u:
         return False
-    if u.endswith("#") or "#content" in u:
-        return False
-
-    # Block known non-job PDFs (Castle Air policies, maps, etc.)
-    if u.endswith(PDF_EXT):
-        if is_bad_pdf(u):
-            return False
-        # Otherwise allow PDFs (some employers post jobs as PDFs)
-        return True
-
-    if any(w in u for w in BAD_WORDS):
+    if not is_http_url(u):
         return False
 
-    # Castle Air: allow ONLY /careers/<slug>/ pages (not generic /careers/ and not PDFs)
-    if "castleair.co.uk" in u:
-        if u.endswith("/careers/") or u.endswith("/careers"):
+    ul = u.lower()
+
+    # jobtoolz /pdf summary endpoints cause duplicates
+    if is_jobtoolz_pdf(ul):
+        return False
+
+    if ul.endswith(PDF_EXT):
+        # allow PDF jobs, but block known non-job PDFs globally
+        return not is_bad_pdf(ul)
+
+    if any(w in ul for w in BAD_WORDS):
+        return False
+
+    # Castle Air: allow only /careers/<slug>/ job pages (not /careers/ itself)
+    if "castleair.co.uk" in ul:
+        if ul.rstrip("/").endswith("/careers"):
             return False
-        return CASTLE_JOB_PATH_HINT in u
+        return (CASTLE_JOB_PATH_HINT in ul)
 
-    # iCIMS
-    if "icims.com" in u:
-        if "/jobs/search" in u or "searchkeyword=" in u or "#icims_content_iframe" in u:
+    # iCIMS: ONLY job detail pages, NEVER /jobs/search or iframe hashes
+    if "icims.com" in ul:
+        if "/jobs/search" in ul or "searchkeyword=" in ul or "#icims_content_iframe" in ul:
             return False
-        return bool(re.search(r"/jobs/\d+/.+/job", u))
+        return bool(re.search(r"/jobs/\d+/.+/job", ul))
 
-    # Workday
-    if "myworkdayjobs.com" in u:
-        return "/job/" in u
+    # Workday: only /job/ detail pages
+    if "myworkdayjobs.com" in ul:
+        return "/job/" in ul
 
-    # Jobtoolz
-    if "jobtoolz.com" in u:
-        return "/en/" in u and "cookie" not in u and "privacy" not in u
+    # Jobtoolz: /en/<slug> jobs (excluding cookie/privacy)
+    if "jobtoolz.com" in ul:
+        return ("/en/" in ul) and ("cookie" not in ul) and ("privacy" not in ul)
 
-    # HeliService
-    if "jobs.heliservice.de" in u:
-        return "id=" in u
+    # HeliService: /de?id=...
+    if "jobs.heliservice.de" in ul:
+        return "id=" in ul
 
     # Known ATS fallback
-    if any(h in u for h in ATS_HINTS):
+    if any(h in ul for h in ATS_HINTS):
         return True
 
     return False
@@ -240,6 +285,11 @@ def collect_job_links_from_page(base_url: str, html_content: str) -> List[str]:
         if not href:
             continue
         full = urljoin(base_url, href)
+
+        # HARDENING: ignore non-http(s) hrefs even if urljoin created them strangely
+        if not is_http_url(full):
+            continue
+
         if is_likely_job_link(full):
             links.append(full)
 
@@ -253,6 +303,9 @@ def collect_job_links_from_page(base_url: str, html_content: str) -> List[str]:
     return out[:MAX_JOB_LINKS_PER_SOURCE]
 
 
+# =====================
+# OPENAI (fail-soft + backoff)
+# =====================
 def openai_post_with_backoff(payload: dict, timeout_s: int) -> dict:
     backoff = 5
     for attempt in range(1, 8):
@@ -343,6 +396,9 @@ Rules:
     return job
 
 
+# =====================
+# VALIDATION / STORE
+# =====================
 def is_valid_job(job: Dict) -> bool:
     title = (job.get("title") or "").strip()
     desc = (job.get("description") or "").strip()
@@ -352,8 +408,9 @@ def is_valid_job(job: Dict) -> bool:
         return False
     if len(desc) < 120:
         return False
-    # Castle Air: never treat policy/map PDFs as jobs
     if link.endswith(PDF_EXT) and is_bad_pdf(link):
+        return False
+    if is_jobtoolz_pdf(link):
         return False
     return True
 
@@ -414,6 +471,9 @@ def upsert_jobs(store: Dict[str, Dict], new_jobs: List[Dict]) -> Dict[str, Dict]
     return store
 
 
+# =====================
+# RSS OUTPUT
+# =====================
 def build_feed(items: List[Dict]) -> str:
     pubdate = rfc2822_now()
     out: List[str] = []
@@ -436,7 +496,8 @@ def build_feed(items: List[Dict]) -> str:
         desc = (j.get("description") or "").strip()
         if j.get("salary_line"):
             desc = f"{j['salary_line']}\n\n{desc}".strip()
-        desc_html = desc.replace("\n", "<br/>")
+
+        desc_html = format_description_for_jboard(desc)
 
         out.append("    <item>")
         out.append(f"      <title>{title}</title>")
@@ -457,6 +518,9 @@ def build_feed(items: List[Dict]) -> str:
     return "\n".join(out)
 
 
+# =====================
+# MAIN
+# =====================
 def main():
     sources = read_sources()
     print(f"Using sources file: {SOURCES_FILE}")
@@ -494,9 +558,13 @@ def main():
                     continue
                 seen_job_urls.add(job_url)
 
+                # HARDENING: never process non-http(s)
+                if not is_http_url(job_url):
+                    continue
+
                 try:
                     if job_url.lower().endswith(PDF_EXT):
-                        # extra safety: skip bad PDFs
+                        # HARDENING: skip known non-job PDFs
                         if is_bad_pdf(job_url):
                             continue
                         raw_text = fetch_pdf_text(job_url)
