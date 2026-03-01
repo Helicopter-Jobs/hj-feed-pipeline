@@ -267,6 +267,7 @@ def extract_output_text(data: dict) -> str:
 
 
 def openai_extract_job(source_url: str, raw_text: str, employer: str) -> Optional[Dict]:
+    # Key change: force FULL posting text, not a summary/paraphrase
     instructions = f"""
 Return ONLY valid JSON with these keys:
 title (string),
@@ -286,13 +287,16 @@ Rules:
 - remote: true only if explicitly stated Remote/Hybrid/Telecommute; else false.
 - apply_url: use a clear apply link if present; otherwise use source_url.
 - salary_line: only if pay is explicitly stated, otherwise "".
-- description: clean plain text; must not be empty.
+- description MUST be the FULL job posting text from the page text.
+  Do NOT summarize. Do NOT paraphrase.
+  Keep the original wording.
+  Preserve headings and bullet points where possible.
 """
 
     payload = {
         "model": "gpt-4o-mini",
         "input": [
-            {"role": "system", "content": "Extract structured job fields for a helicopter job board. Output ONLY JSON."},
+            {"role": "system", "content": "Extract structured job fields for a job board. Output ONLY JSON."},
             {"role": "user", "content": f"source_url: {source_url}\n\n{instructions}\n\nJOB PAGE TEXT:\n{raw_text}"},
         ],
         "temperature": 0.0,
@@ -337,9 +341,8 @@ def is_valid_job(job: Dict) -> bool:
 
     if not title:
         return False
-    if len(desc) < 80:
+    if len(desc) < 120:
         return False
-    # Block iCIMS listing/search URLs as "jobs"
     if "icims.com" in link and ("/jobs/search" in link or "searchkeyword=" in link or "#icims_content_iframe" in link):
         return False
     return True
@@ -431,6 +434,9 @@ def build_feed(items: List[Dict]) -> str:
         if j.get("salary_line"):
             desc = f"{j['salary_line']}\n\n{desc}".strip()
 
+        # Key change: make line breaks render nicely in JBoard
+        desc_html = desc.replace("\n", "<br/>")
+
         out.append("    <item>")
         out.append(f"      <title>{title}</title>")
         out.append(f"      <employer>{employer}</employer>")
@@ -441,7 +447,7 @@ def build_feed(items: List[Dict]) -> str:
         out.append(f"      <location>{location}</location>")
         out.append(f"      <remote>{remote}</remote>")
         out.append("      <description><![CDATA[")
-        out.append(desc)
+        out.append(desc_html)
         out.append("]]></description>")
         out.append("    </item>")
 
@@ -520,7 +526,7 @@ def main():
 
     store = load_store()
     store = upsert_jobs(store, new_jobs)
-    store = scrub_store(store)   # remove junk already stored
+    store = scrub_store(store)
     store = prune_store(store)
     save_store(store)
 
