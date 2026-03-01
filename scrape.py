@@ -59,7 +59,7 @@ ATS_HINTS = [
 PDF_EXT = ".pdf"
 
 # =====================
-# HARDENING RULES
+# HARDENING + FILTERS
 # =====================
 PDF_BLOCK_HINTS = [
     "modern-slavery",
@@ -78,6 +78,66 @@ PDF_BLOCK_HINTS = [
 ]
 
 CASTLE_JOB_PATH_HINT = "/careers/"
+
+
+AVIATION_KEEP_KEYWORDS = [
+    # core rotor/helicopter
+    "helicopter", "rotor", "rotary", "rotor-wing", "rotor wing", "rotorcraft", "vertical lift",
+    "aw139", "aw109", "aw119", "aw169", "aw189",
+    "h125", "h130", "h135", "h145", "ec135", "ec145",
+    "s92", "s-92", "s76", "s-76", "uh-1", "uh1",
+    "bell 206", "bell 407", "bell 412", "bell 429",
+    # pilots/aircrew
+    "pilot", "captain", "co-pilot", "copilot", "sic", "pic", "first officer",
+    "aircrew", "crew member", "hoist", "hho", "rescue",
+    # maintenance
+    "mechanic", "avionics", "a&p", "a and p", "b1.3", "b2", "maintenance", "part-145",
+    # EMS/clinical
+    "hems", "air medical", "medevac", "flight nurse", "nurse", "paramedic", "emt",
+    # ops/dispatch (aviation-specific)
+    "flight operations", "dispatch", "dispatcher", "operations officer"
+]
+
+CORPORATE_BLOCK_KEYWORDS = [
+    "marketing", "social media", "content", "brand", "sales", "account executive",
+    "finance", "accounting", "payroll", "hr", "human resources", "recruiter",
+    "talent acquisition", "legal", "attorney", "paralegal",
+    "information technology", "software engineer", "developer",
+    "customer service", "call center", "office manager", "admin assistant"
+]
+
+FIXED_WING_BLOCK_KEYWORDS = [
+    # general fixed-wing terms
+    "fixed wing", "fixed-wing", "airplane", "aeroplane", "jet", "turboprop",
+    "airline", "part 121", "part121",
+
+    # common fixed-wing aircraft / families
+    "cessna", "citation", "gulfstream", "learjet", "king air", "beechcraft",
+    "pilatus", "pc-12", "pc12", "pc-24", "pc24",
+    "embraer", "phenom", "boeing", "airbus",
+    "a320", "a321", "a330", "a350", "b737", "737", "b747", "b757", "b767", "b777", "b787",
+
+    # fixed-wing crew/ground roles
+    "flight attendant", "cabin crew", "ramp agent", "gate agent",
+
+    # fixed-wing maintenance signals
+    "airframe and powerplant", "airframe & powerplant",
+    "aircraft mechanic", "aircraft maintenance", "airframe", "powerplant",
+    "avionics technician (aircraft)", "sheet metal (aircraft)",
+
+    # fixed-wing airports/FBO context
+    "fbo", "mro (aircraft)"
+]
+
+ROTOR_OVERRIDE_KEYWORDS = [
+    "helicopter", "rotor", "rotary", "rotor-wing", "rotor wing",
+    "aw139", "aw109", "aw119", "aw169", "aw189",
+    "h125", "h130", "h135", "h145", "ec135", "ec145",
+    "s92", "s-92", "s76", "s-76",
+    "bell 206", "bell 407", "bell 412", "bell 429",
+    "uh-1", "uh1", "hems", "air medical", "medevac",
+    "rotorcraft", "vertical lift"
+]
 
 
 def is_jobtoolz_pdf(u: str) -> bool:
@@ -195,7 +255,6 @@ def is_http_url(u: str) -> bool:
 
 
 def strip_tracking(url: str) -> str:
-    # Keeps guids stable by removing query/fragment tracking params
     try:
         p = urlparse(url)
         clean = f"{p.scheme}://{p.netloc}{p.path}"
@@ -217,6 +276,26 @@ def format_description_for_jboard(desc: str) -> str:
         return ""
     d = d.replace("•", "-").replace("·", "-")
     return d.replace("\n", "<br/>")
+
+
+def is_relevant_aviation_job(title: str, description: str) -> bool:
+    t = f"{title}\n{description}".lower()
+    keep = any(k in t for k in AVIATION_KEEP_KEYWORDS)
+    block = any(k in t for k in CORPORATE_BLOCK_KEYWORDS)
+
+    if keep:
+        return True
+    if block:
+        return False
+    return True
+
+
+def is_fixed_wing_job(title: str, description: str) -> bool:
+    t = f"{title}\n{description}".lower()
+
+    if any(k in t for k in ROTOR_OVERRIDE_KEYWORDS):
+        return False
+    return any(k in t for k in FIXED_WING_BLOCK_KEYWORDS)
 
 
 # =====================
@@ -393,13 +472,9 @@ Rules:
 # HP HELICOPTERS SINGLE-PAGE MULTI-JOB HANDLER
 # =====================
 def extract_hp_jobs_from_careers_page(listing_url: str, listing_html: str, employer: str) -> List[Dict]:
-    """
-    HP Helicopters careers is a single page with multiple roles; create 1 job per detected title-like line.
-    """
     soup = BeautifulSoup(listing_html, "lxml")
     page_text = normalize_space(soup.get_text("\n"))
 
-    # Detect likely job titles from lines containing role keywords
     lines = [ln.strip() for ln in page_text.split("\n") if ln.strip()]
     candidates: List[str] = []
     for ln in lines:
@@ -410,7 +485,6 @@ def extract_hp_jobs_from_careers_page(listing_url: str, listing_html: str, emplo
             if 5 <= len(ln) <= 120:
                 candidates.append(ln)
 
-    # De-dupe preserve order
     seen = set()
     titles: List[str] = []
     for t in candidates:
@@ -429,7 +503,6 @@ def extract_hp_jobs_from_careers_page(listing_url: str, listing_html: str, emplo
         if not job:
             continue
 
-        # Force a stable per-role guid so JBoard gets separate jobs
         slug = re.sub(r"[^a-z0-9]+", "-", t.lower()).strip("-")[:80]
         job["title"] = t
         job["apply_url"] = base
@@ -595,11 +668,16 @@ def main():
                 print(f"  Failed to load listing page: {e}")
                 continue
 
-            # HP Helicopters special-case: one page, multiple roles, no job detail links
+            # HP Helicopters special-case
             if "hphelicopters.com" in dom and "/careers" in src:
                 hp_jobs = extract_hp_jobs_from_careers_page(src, listing_html, employer)
                 print(f"  HP special-case: extracted {len(hp_jobs)} jobs from single page")
                 for j in hp_jobs:
+                    # apply filters
+                    if is_fixed_wing_job(j.get("title", ""), j.get("description", "")):
+                        continue
+                    if not is_relevant_aviation_job(j.get("title", ""), j.get("description", "")):
+                        continue
                     new_jobs.append(j)
                     print(f"   + {j.get('title','(no title)')[:90]}")
                 continue
@@ -637,6 +715,14 @@ def main():
                         continue
                     if not is_valid_job(job):
                         print("   - Skipped invalid job:", source_url)
+                        continue
+
+                    # NEW FILTERS
+                    if is_fixed_wing_job(job.get("title", ""), job.get("description", "")):
+                        print("   - Skipped fixed-wing job:", job.get("title", "")[:80])
+                        continue
+                    if not is_relevant_aviation_job(job.get("title", ""), job.get("description", "")):
+                        print("   - Skipped non-aviation corporate job:", job.get("title", "")[:80])
                         continue
 
                     new_jobs.append(job)
