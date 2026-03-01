@@ -1,1 +1,52 @@
+name: Build JBoard XML feed (hard)
 
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "15 10 * * 2,6" # Tue & Sat at 10:15 UTC (~2:15am PT)
+
+permissions:
+  contents: write
+
+concurrency:
+  group: hj-feed-pipeline
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install playwright beautifulsoup4 lxml requests pdfminer.six
+          python -m playwright install --with-deps chromium
+
+      - name: Build feed.xml (hard)
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          SOURCES_FILE: sources_hard.txt
+        run: |
+          python scrape.py
+
+      - name: Commit updated feed.xml
+        run: |
+          git config user.name "hj-feed-bot"
+          git config user.email "hj-feed-bot@users.noreply.github.com"
+          git add feed.xml
+          git commit -m "Update feed.xml (hard)" || echo "No changes"
+          git pull --rebase origin main
+          git push
