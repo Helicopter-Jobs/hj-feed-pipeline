@@ -1,4 +1,4 @@
-name: Build JBoard XML feed
+name: Build JBoard XML feed (Test - 1 source)
 
 on:
   workflow_dispatch:
@@ -15,7 +15,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 60
 
     steps:
       - name: Checkout repo
