@@ -1,4 +1,4 @@
-name: Build JBoard XML feed (Test - 1 source)
+name: Build JBoard XML feed 
 
 on:
   workflow_dispatch:
