@@ -5,6 +5,9 @@ on:
   schedule:
     - cron: "15 10 * * *" # daily at 10:15 UTC (~2:15am PT)
 
+permissions:
+  contents: write
+  
 jobs:
   build:
     runs-on: ubuntu-latest
