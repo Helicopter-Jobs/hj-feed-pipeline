@@ -21,7 +21,6 @@ if not OPENAI_API_KEY:
     raise SystemExit("Missing OPENAI_API_KEY (GitHub repo → Settings → Secrets and variables → Actions).")
 
 SOURCES_FILE = os.environ.get("SOURCES_FILE", "sources_easy.txt")
-
 OUT_XML = "feed.xml"
 STATE_JSON = "jobs.json"  # master merged job store
 
@@ -32,14 +31,13 @@ USER_AGENT = (
 
 BROWSER_TIMEOUT_MS = 45_000
 
-# Conservative defaults: override per workflow if needed
+# Override per workflow if needed (recommended):
 MAX_JOB_LINKS_PER_SOURCE = int(os.environ.get("MAX_JOB_LINKS_PER_SOURCE", "15"))
-MAX_TEXT_CHARS_TO_LLM = int(os.environ.get("MAX_TEXT_CHARS_TO_LLM", "20000"))
-
-# Keep feed/store lean and aligned with your JBoard expiry
+MAX_TEXT_CHARS_TO_LLM = int(os.environ.get("MAX_TEXT_CHARS_TO_LLM", "18000"))
 RETENTION_DAYS = int(os.environ.get("RETENTION_DAYS", "30"))
 
 CATEGORY_ENUM = ["Pilot", "Maintenance", "Medical", "Dispatch", "Operations", "Other"]
+JOBTYPE_ENUM = ["Full-time", "Part-time", "Contract", "Temporary", "Internship", "Rotation", "Other"]
 
 EMPLOYER_MAP = {
     "castleair.co.uk": "Castle Air Aviation",
@@ -165,13 +163,124 @@ def safe_json_load(s: str) -> Optional[dict]:
 
 
 # =====================
+# LIGHTWEIGHT NORMALIZERS (Automation polish)
+# =====================
+REMOTE_HINTS = [
+    "remote", "work from home", "telecommute", "telecommuting", "home-based",
+    "hybrid", "virtual", "fully remote"
+]
+
+ROTATION_HINTS = [
+    "14x14", "28x28", "21x21", "7 on", "7 off", "on/off", "rotation", "rotational"
+]
+
+COUNTRY_HINTS = [
+    "united states", "usa", "u.s.", "us", "canada", "united kingdom", "uk", "england",
+    "scotland", "wales", "ireland", "france", "germany", "netherlands", "belgium",
+    "denmark", "norway", "sweden", "poland", "brazil", "suriname", "australia",
+    "new zealand", "uae", "united arab emirates"
+]
+
+
+def normalize_remote(remote_value: bool, text: str) -> bool:
+    if remote_value is True:
+        return True
+    t = (text or "").lower()
+    return any(h in t for h in REMOTE_HINTS)
+
+
+def normalize_location(location: str, text: str) -> str:
+    loc = (location or "").strip()
+    if loc and loc.lower() != "not specified":
+        return loc
+
+    t = (text or "").lower()
+    for c in COUNTRY_HINTS:
+        if c in t:
+            # title-case basic countries; keep US as "United States"
+            if c in ("usa", "u.s.", "us"):
+                return "United States"
+            if c == "uk":
+                return "United Kingdom"
+            return c.title()
+    return "Not specified"
+
+
+def infer_job_type(title: str, desc: str) -> str:
+    t = f"{title}\n{desc}".lower()
+
+    if any(x in t for x in ["intern", "internship"]):
+        return "Internship"
+    if any(x in t for x in ["part-time", "part time"]):
+        return "Part-time"
+    if any(x in t for x in ["contract", "1099", "fixed term", "fixed-term"]):
+        return "Contract"
+    if any(x in t for x in ["temporary", "temp"]):
+        return "Temporary"
+    if any(x in t for x in ROTATION_HINTS):
+        return "Rotation"
+    if any(x in t for x in ["full-time", "full time"]):
+        return "Full-time"
+    # default
+    return "Other"
+
+
+def infer_category(title: str, desc: str) -> str:
+    t = f"{title}\n{desc}".lower()
+
+    # Pilot
+    if any(k in t for k in ["pilot", "captain", "co-pilot", "copilot", "sic", "pic", "first officer"]):
+        return "Pilot"
+
+    # Maintenance
+    if any(k in t for k in ["mechanic", "engineer", "avionics", "a&p", "a and p", "b1.3", "b2", "part-145", "maintenance"]):
+        return "Maintenance"
+
+    # Medical
+    if any(k in t for k in ["paramedic", "nurse", "rn", "flight nurse", "emt", "clinician", "medic"]):
+        return "Medical"
+
+    # Dispatch / Ops
+    if any(k in t for k in ["dispatcher", "dispatch"]):
+        return "Dispatch"
+
+    if any(k in t for k in ["operations", "ops", "ground operations", "flight operations", "coordinator", "coordination"]):
+        return "Operations"
+
+    return "Other"
+
+
+def format_description_for_jboard(desc: str) -> str:
+    """
+    Keeps it readable in JBoard:
+    - Converts newlines to <br/>
+    - Adds extra break before common headings
+    """
+    d = (desc or "").strip()
+    if not d:
+        return ""
+
+    # normalize bullet characters slightly
+    d = d.replace("•", "-").replace("·", "-")
+
+    # keep line breaks in JBoard
+    d = d.replace("\n", "<br/>")
+
+    # add breathing room before headings
+    for h in ["DUTIES", "RESPONSIBILITIES", "REQUIREMENTS", "QUALIFICATIONS", "SKILLS", "EXPERIENCE", "WHAT YOU’LL", "WHAT YOU'LL"]:
+        d = re.sub(rf"(<br/>)+\s*{h}", r"<br/><br/>" + h, d, flags=re.IGNORECASE)
+
+    return d
+
+
+# =====================
 # LINK FILTERING
 # =====================
 BAD_WORDS = [
     "privacy", "cookie", "legal", "terms", "accessibility", "sustainability",
     "diversity", "community", "stories", "leadership", "culture", "history",
-    "capabilities", "companies", "supplier", "veteran", "internship", "pay-benefits",
-    "press", "news", "blog"
+    "capabilities", "companies", "supplier", "veteran", "internship-program",
+    "pay-benefits", "press", "news", "blog"
 ]
 
 
@@ -189,7 +298,7 @@ def is_likely_job_link(url: str) -> bool:
     if any(w in u for w in BAD_WORDS):
         return False
 
-    # iCIMS: ONLY real job detail URLs, NEVER the search/listing page
+    # iCIMS: ONLY job detail pages
     if "icims.com" in u:
         if "/jobs/search" in u or "searchkeyword=" in u or "#icims_content_iframe" in u:
             return False
@@ -199,7 +308,7 @@ def is_likely_job_link(url: str) -> bool:
     if "myworkdayjobs.com" in u:
         return "/job/" in u
 
-    # Jobtoolz: job pages are /en/<slug>
+    # Jobtoolz: /en/<slug> jobs
     if "jobtoolz.com" in u:
         return "/en/" in u and "cookie" not in u and "privacy" not in u
 
@@ -207,7 +316,7 @@ def is_likely_job_link(url: str) -> bool:
     if "jobs.heliservice.de" in u:
         return "id=" in u
 
-    # Known ATS: keep as last resort
+    # Known ATS fallback
     if any(h in u for h in ATS_HINTS):
         return True
 
@@ -267,7 +376,6 @@ def extract_output_text(data: dict) -> str:
 
 
 def openai_extract_job(source_url: str, raw_text: str, employer: str) -> Optional[Dict]:
-    # Key change: force FULL posting text, not a summary/paraphrase
     instructions = f"""
 Return ONLY valid JSON with these keys:
 title (string),
@@ -276,6 +384,7 @@ location (string),
 remote (boolean),
 apply_url (string),
 category (one of {CATEGORY_ENUM}),
+job_type (one of {JOBTYPE_ENUM}),
 description (string),
 salary_line (string or empty)
 
@@ -288,9 +397,7 @@ Rules:
 - apply_url: use a clear apply link if present; otherwise use source_url.
 - salary_line: only if pay is explicitly stated, otherwise "".
 - description MUST be the FULL job posting text from the page text.
-  Do NOT summarize. Do NOT paraphrase.
-  Keep the original wording.
-  Preserve headings and bullet points where possible.
+  Do NOT summarize. Do NOT paraphrase. Keep original wording.
 """
 
     payload = {
@@ -314,12 +421,16 @@ Rules:
         print("OpenAI returned non-JSON/empty output for:", source_url)
         return None
 
+    # enforce base fields
     job["employer"] = employer
     job["source_url"] = source_url
     job["guid"] = source_url
 
+    # sanitize types
     if job.get("category") not in CATEGORY_ENUM:
         job["category"] = "Other"
+    if job.get("job_type") not in JOBTYPE_ENUM:
+        job["job_type"] = "Other"
     if not isinstance(job.get("remote"), bool):
         job["remote"] = False
 
@@ -327,6 +438,15 @@ Rules:
         job[k] = str(job.get(k, "")).strip()
     if not job["apply_url"]:
         job["apply_url"] = source_url
+
+    # Automation polish: normalize/override to be consistent
+    job["remote"] = normalize_remote(job.get("remote", False), job.get("description", ""))
+    job["location"] = normalize_location(job.get("location", ""), job.get("description", ""))
+    job["category"] = infer_category(job.get("title", ""), job.get("description", ""))
+
+    # if model didn't set job_type well, infer it
+    if job.get("job_type") == "Other":
+        job["job_type"] = infer_job_type(job.get("title", ""), job.get("description", ""))
 
     return job
 
@@ -421,7 +541,14 @@ def build_feed(items: List[Dict]) -> str:
     out.append("    <link>https://helicopter-jobs.com</link>")
     out.append("    <description>Direct-employer helicopter jobs</description>")
 
-    for j in items:
+    # Sort by most recently seen first (polish)
+    def sort_key(j: Dict):
+        dt = parse_iso(j.get("last_seen", "")) or parse_iso(j.get("first_seen", "")) or datetime(1970, 1, 1, tzinfo=timezone.utc)
+        return dt
+
+    items_sorted = sorted(items, key=sort_key, reverse=True)
+
+    for j in items_sorted:
         title = rss_escape(j.get("title", ""))
         employer = rss_escape(j.get("employer", ""))
         link = rss_escape(j.get("apply_url", j.get("source_url", "")))
@@ -434,8 +561,7 @@ def build_feed(items: List[Dict]) -> str:
         if j.get("salary_line"):
             desc = f"{j['salary_line']}\n\n{desc}".strip()
 
-        # Key change: make line breaks render nicely in JBoard
-        desc_html = desc.replace("\n", "<br/>")
+        desc_html = format_description_for_jboard(desc)
 
         out.append("    <item>")
         out.append(f"      <title>{title}</title>")
@@ -446,6 +572,8 @@ def build_feed(items: List[Dict]) -> str:
         out.append(f"      <category>{category}</category>")
         out.append(f"      <location>{location}</location>")
         out.append(f"      <remote>{remote}</remote>")
+        # job_type is extra metadata; JBoard may ignore it (safe)
+        out.append(f"      <job_type>{rss_escape(j.get('job_type','Other'))}</job_type>")
         out.append("      <description><![CDATA[")
         out.append(desc_html)
         out.append("]]></description>")
