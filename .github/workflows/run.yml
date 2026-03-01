@@ -4,8 +4,14 @@ on:
   workflow_dispatch:
   schedule:
     - cron: "15 10 * * *" # daily at 10:15 UTC (~2:15am PT)
+
 permissions:
   contents: write
+
+concurrency:
+  group: hj-feed-pipeline
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -14,6 +20,9 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -38,4 +47,5 @@ jobs:
           git config user.email "hj-feed-bot@users.noreply.github.com"
           git add feed.xml
           git commit -m "Update feed.xml" || echo "No changes"
+          git pull --rebase origin main
           git push
