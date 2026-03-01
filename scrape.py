@@ -195,7 +195,11 @@ def is_likely_job_link(url: str) -> bool:
         return False
 
     if "icims.com" in u:
-        return "/jobs/" in u and "/job" in u
+    # Reject listing/search pages
+    if "/jobs/search" in u or "searchkeyword=" in u or "#icims_content_iframe" in u:
+        return False
+    # Accept only true job detail URLs like .../jobs/12345/.../job
+    return bool(re.search(r"/jobs/\d+/.+/job", u))
 
     if "myworkdayjobs.com" in u:
         return "/job/" in u
