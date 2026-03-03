@@ -55,6 +55,10 @@ EMPLOYER_MAP = {
     "careers-chc.icims.com": "CHC",
     "jobs.papillon.com": "Papillon",
     "hillsboroaviation.com": "Hillsboro Aviation",
+    "jobs.geisinger.org": "Geisinger",
+    "apollomedflightcareers.com": "Apollo MedFlight",
+    "careers.smartrecruiters.com": "Canadian Helicopters",
+    "jobs.smartrecruiters.com": "Canadian Helicopters",
 }
 
 # Source URL overrides: fixes generic ATS domains (Workable/Salesforce/Jobvite/Greenhouse etc.)
@@ -63,6 +67,9 @@ EMPLOYER_SOURCE_OVERRIDES: List[Tuple[str, str]] = [
     ("https://gama-aviation.my.salesforce-sites.com/", "Gama Aviation"),
     ("https://jobs.jobvite.com/ornge", "Ornge"),
     ("https://job-boards.greenhouse.io/lifelinkiii", "Life Link III"),
+    ("https://careers.smartrecruiters.com/CanadianHelicopters", "Canadian Helicopters"),
+    ("https://jobs.geisinger.org/ems", "Geisinger"),
+    ("https://www.apollomedflightcareers.com/current-positions", "Apollo MedFlight"),
 ]
 
 ATS_HINTS = [
@@ -401,11 +408,15 @@ def is_likely_job_link(url: str) -> bool:
     if "jobs.heliservice.de" in ul:
         return "id=" in ul
 
+    # SmartRecruiters job detail pages are on jobs.smartrecruiters.com
+    if "jobs.smartrecruiters.com" in ul:
+        return True
+
     # Other ATS are allowed but may require fallback
     if any(h in ul for h in ATS_HINTS):
         return True
 
-    # As a safety default, only keep obvious job/career links
+    # Safety default: only keep obvious job/career links
     return any(x in ul for x in ["/job", "/jobs", "/career", "/careers", "requisition", "vacancy", "vacancies"])
 
 
