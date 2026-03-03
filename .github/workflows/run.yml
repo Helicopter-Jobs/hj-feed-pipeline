@@ -50,10 +50,10 @@ jobs:
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           SOURCES_FILE: sources_hard.txt
-          MAX_JOB_LINKS_PER_SOURCE: "80"
-          MAX_TOTAL_JOBS: "600"
-          REQUEST_DELAY_SECONDS: "1.0"
-          REQUEST_DELAY_JITTER: "0.8"
+          MAX_JOB_LINKS_PER_SOURCE: "35"
+          MAX_TOTAL_JOBS: "350"
+          REQUEST_DELAY_SECONDS: "1.1"
+          REQUEST_DELAY_JITTER: "0.9"
         run: |
           python scrape.py
 
