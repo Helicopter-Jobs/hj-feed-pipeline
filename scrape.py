@@ -32,10 +32,10 @@ USER_AGENT = (
 
 # Timeouts + caps (override in workflow env if needed)
 BROWSER_TIMEOUT_MS = int(os.environ.get("BROWSER_TIMEOUT_MS", "45000"))
-MAX_JOB_LINKS_PER_SOURCE = int(os.environ.get("MAX_JOB_LINKS_PER_SOURCE", "50"))   # maximize capture
+MAX_JOB_LINKS_PER_SOURCE = int(os.environ.get("MAX_JOB_LINKS_PER_SOURCE", "50"))
 MAX_TEXT_CHARS_TO_LLM = int(os.environ.get("MAX_TEXT_CHARS_TO_LLM", "18000"))
 RETENTION_DAYS = int(os.environ.get("RETENTION_DAYS", "30"))
-MAX_TOTAL_JOBS = int(os.environ.get("MAX_TOTAL_JOBS", "500"))  # maximize overall, still safe
+MAX_TOTAL_JOBS = int(os.environ.get("MAX_TOTAL_JOBS", "500"))
 
 # Throttle (reduces blocks + rate-limits)
 REQUEST_DELAY_SECONDS = float(os.environ.get("REQUEST_DELAY_SECONDS", "0.9"))
@@ -50,11 +50,20 @@ EMPLOYER_MAP = {
     "nhv-group.jobtoolz.com": "NHV Group",
     "bristow.wd1.myworkdayjobs.com": "Bristow Group",
     "careers-quanta.icims.com": "PJ Helicopters",
-    "allcareers-quanta.icims.com": "PJ Helicopters",  # fallback if it appears
+    "allcareers-quanta.icims.com": "PJ Helicopters",
     "careers-chccrew.icims.com": "CHC",
     "careers-chc.icims.com": "CHC",
     "jobs.papillon.com": "Papillon",
+    "coulsonaviation.com": "Coulson Aviation",
+    "hillsboroaviation.com": "Hillsboro Aviation",
 }
+
+# Source URL overrides: fixes generic ATS domains (Workable/Salesforce/etc.)
+EMPLOYER_SOURCE_OVERRIDES = [
+    ("https://apply.workable.com/billings-flying-service/", "Billings Flying Service"),
+    ("https://gama-aviation.my.salesforce-sites.com/", "Gama Aviation"),
+    ("https://coulsonaviation.com/", "Coulson Aviation"),
+]
 
 ATS_HINTS = [
     "myworkdayjobs.com",
@@ -72,7 +81,7 @@ PDF_EXT = ".pdf"
 
 
 # =====================
-# BLOCKLISTS (per your instruction: block corp + safety/quality too)
+# BLOCKLISTS (you said: block corp + safety/quality too)
 # =====================
 CORPORATE_BLOCK_KEYWORDS = [
     # finance/accounting
@@ -126,7 +135,6 @@ AVIATION_CORE_KEEP = [
     "dispatcher", "dispatch", "flight operations", "operations officer"
 ]
 
-
 PDF_BLOCK_HINTS = [
     "modern-slavery", "slavery", "statement", "policy", "privacy", "cookie", "terms",
     "map", "base-map", "liskeard", "handbook", "environment"
@@ -174,6 +182,14 @@ def employer_for_domain(dom: str) -> str:
     return dom or "Unknown"
 
 
+def employer_for_source(url: str) -> str:
+    u = (url or "").strip()
+    for prefix, name in EMPLOYER_SOURCE_OVERRIDES:
+        if u.startswith(prefix):
+            return name
+    return employer_for_domain(domain_from_url(u))
+
+
 def read_sources() -> List[str]:
     raw = open(SOURCES_FILE, "r", encoding="utf-8").read().strip()
     if not raw:
@@ -182,7 +198,6 @@ def read_sources() -> List[str]:
 
     urls: List[str] = []
     for ln in lines:
-        # allow accidental commas
         ln = ln.strip().strip(",")
         if "http" in ln and " " in ln:
             for p in ln.split():
@@ -251,11 +266,14 @@ def is_http_url(u: str) -> bool:
 
 
 def strip_tracking(url: str) -> str:
-    """Stable URL for GUIDs: remove query + fragment."""
+    """Stable GUID: lowercase host, remove query + fragment, remove trailing slash."""
     try:
         p = urlparse(url)
-        clean = f"{p.scheme}://{p.netloc}{p.path}"
-        return clean.rstrip("/")
+        scheme = (p.scheme or "https").lower()
+        netloc = (p.netloc or "").lower().replace("www.", "")
+        path = (p.path or "").rstrip("/")
+        clean = f"{scheme}://{netloc}{path}"
+        return clean
     except Exception:
         return (url or "").split("?")[0].split("#")[0].rstrip("/")
 
@@ -298,7 +316,6 @@ def is_fixed_wing_job(title: str, description: str) -> bool:
 
 def is_blocked_corporate(title: str, description: str) -> bool:
     t = f"{title}\n{description}".lower()
-    # If it's clearly core aviation ops (pilot/mech/medical/aircrew/dispatch), keep it
     if any(k in t for k in AVIATION_CORE_KEEP):
         return False
     return any(k in t for k in CORPORATE_BLOCK_KEYWORDS)
@@ -366,11 +383,11 @@ def is_likely_job_link(url: str) -> bool:
     if "jobs.heliservice.de" in ul:
         return "id=" in ul
 
-    # Workable job detail pages usually have /j/ style or /jobs/—allow
+    # Workable
     if "apply.workable.com" in ul:
         return True
 
-    # ADP / Salesforce / Babcock etc. are handled by “single-page” fallback (they may not expose job links reliably)
+    # Other ATS are allowed but may fall back to parsing the page
     if any(h in ul for h in ATS_HINTS):
         return True
 
@@ -388,7 +405,6 @@ def collect_job_links_from_page(base_url: str, html_content: str) -> List[str]:
         if is_http_url(full) and is_likely_job_link(full):
             links.append(full)
 
-    # unique preserve order
     seen = set()
     out = []
     for l in links:
@@ -476,19 +492,16 @@ Return ONLY JSON.
         print("OpenAI returned non-JSON/empty output for:", source_url)
         return None
 
-    # normalize strings
     for k in ["title", "location", "apply_url", "description", "salary_line", "category"]:
         job[k] = str(job.get(k, "")).strip()
 
     job["employer"] = employer
     job["source_url"] = source_url
-    job["guid"] = strip_tracking(source_url)  # stable GUID
+    job["guid"] = strip_tracking(source_url)
 
-    # Enforce remote boolean
     if not isinstance(job.get("remote"), bool):
         job["remote"] = False
 
-    # Fix category + clean description
     job["category"] = category_override(job.get("title", ""), job.get("description", ""), job.get("category", "Other"))
     job["description"] = dedupe_lines_keep_order(job.get("description", ""))
 
@@ -647,12 +660,11 @@ def main():
                 print(f"Reached MAX_TOTAL_JOBS={MAX_TOTAL_JOBS}. Stopping early.")
                 break
 
-            employer = employer_for_domain(domain_from_url(src))
+            employer = employer_for_source(src)
             print(f"\nSOURCE: {src}")
             print(f"Employer: {employer}")
 
             try:
-                # domcontentloaded is more reliable than networkidle for ATS portals
                 page.goto(src, timeout=BROWSER_TIMEOUT_MS, wait_until="domcontentloaded")
                 sleep_a_bit()
                 listing_html = page.content()
@@ -663,7 +675,6 @@ def main():
             links = collect_job_links_from_page(src, listing_html)
             print(f"  Found {len(links)} candidate job links")
 
-            # If no links found, fall back to parsing the listing page itself as a "single job"
             if not links:
                 links = [src]
 
@@ -697,7 +708,6 @@ def main():
                     if not job or not is_valid_job(job):
                         continue
 
-                    # Filters
                     if is_fixed_wing_job(job.get("title", ""), job.get("description", "")):
                         continue
                     if is_blocked_corporate(job.get("title", ""), job.get("description", "")):
