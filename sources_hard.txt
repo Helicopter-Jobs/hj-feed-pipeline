@@ -1,4 +1,4 @@
-# PJ Helicopters (Quanta iCIMS tenant)
+# PJ Helicopters (Quanta iCIMS tenant) — use the Quanta tenant search
 https://careers-quanta.icims.com/jobs/search?ss=1&searchKeyword=%22pj%20helicopters%22
 https://careers-quanta.icims.com/jobs/search?ss=1&searchKeyword=%22pj%20helicopters%22&searchCategory=33482
 https://careers-quanta.icims.com/jobs/search?ss=1&searchKeyword=%22pj%20helicopters%22&searchCategory=35583
@@ -37,8 +37,8 @@ https://job-boards.greenhouse.io/lifelinkiii
 # Canadian Helicopters (SmartRecruiters careers page)
 https://careers.smartrecruiters.com/CanadianHelicopters
 
-# Geisinger (EMS hub — catches pilots/aircrew/clinical/mech/dispatch)
+# Geisinger (EMS hub)
 https://jobs.geisinger.org/ems
 
-# Apollo MedFlight (direct page with current openings)
+# Apollo MedFlight (Current Positions)
 https://www.apollomedflightcareers.com/current-positions
