@@ -1,12 +1,14 @@
 # PJ Helicopters (Quanta iCIMS tenant) — use careers-quanta (NOT allcareers-quanta)
+# Optional improvement added: the non-category-filtered search catches jobs that aren't tagged into those categories
+https://careers-quanta.icims.com/jobs/search?ss=1&searchKeyword=%22pj%20helicopters%22
 https://careers-quanta.icims.com/jobs/search?ss=1&searchKeyword=%22pj%20helicopters%22&searchCategory=33482
 https://careers-quanta.icims.com/jobs/search?ss=1&searchKeyword=%22pj%20helicopters%22&searchCategory=35583
 
 # Bristow (Workday)
 https://bristow.wd1.myworkdayjobs.com/Careers/jobs?jobFamilyGroup=5ea31b337d684a0d9feb04b82fff0b30&jobFamilyGroup=022eba9bbb674793b4d75979e8cb5fb8
 
-# NHV (Jobtoolz)
-https://nhv-group.jobtoolz.com/en#vacatures
+# NHV (Jobtoolz) — prefer no fragment
+https://nhv-group.jobtoolz.com/en
 
 # Castle Air
 https://castleair.co.uk/careers/
@@ -31,3 +33,7 @@ https://gama-aviation.my.salesforce-sites.com/Recruit/fRecruit__ApplyJobList
 https://workforcenow.adp.com/mascsr/default/mdf/recruitment/recruitment.html?cid=ca9acafc-c72a-4477-94e5-f00db66b65b6&ccId=19000101_000001&lang=en_US
 https://workforcenow.adp.com/mascsr/default/mdf/recruitment/recruitment.html?cid=92144dc3-94dc-44b9-8a18-90099bf3a77c&ccId=19000101_000001&type=JS&lang=en_US
 https://workforcenow.adp.com/mascsr/default/mdf/recruitment/recruitment.html?cid=6fd3b46c-43dd-44a2-9cfc-105047c7227d&lang=en_US
+
+# Coulson: your careers-v2 link is a gateway and usually returns 0 jobs.
+# Keep it OUT unless you have the real ATS listing URL Coulson uses.
+# https://coulsonaviation.com/careers-v2/
