@@ -37,11 +37,12 @@ MAX_TEXT_CHARS_TO_LLM = int(os.environ.get("MAX_TEXT_CHARS_TO_LLM", "18000"))
 RETENTION_DAYS = int(os.environ.get("RETENTION_DAYS", "30"))
 MAX_TOTAL_JOBS = int(os.environ.get("MAX_TOTAL_JOBS", "500"))
 
-# Throttle (reduces blocks + rate-limits)
+# Throttle
 REQUEST_DELAY_SECONDS = float(os.environ.get("REQUEST_DELAY_SECONDS", "0.9"))
 REQUEST_DELAY_JITTER = float(os.environ.get("REQUEST_DELAY_JITTER", "0.6"))
 
 CATEGORY_ENUM = ["Pilot", "Maintenance", "Medical", "Dispatch", "Operations", "Other"]
+PDF_EXT = ".pdf"
 
 EMPLOYER_MAP = {
     "castleair.co.uk": "Castle Air Aviation",
@@ -49,19 +50,20 @@ EMPLOYER_MAP = {
     "sloanehelicopters.com": "Sloane Helicopters",
     "nhv-group.jobtoolz.com": "NHV Group",
     "bristow.wd1.myworkdayjobs.com": "Bristow Group",
+
+    # iCIMS tenants
     "careers-quanta.icims.com": "PJ Helicopters",
     "allcareers-quanta.icims.com": "PJ Helicopters",
     "careers-chccrew.icims.com": "CHC",
     "careers-chc.icims.com": "CHC",
-    "jobs.papillon.com": "Papillon",
+
+    # Others
     "hillsboroaviation.com": "Hillsboro Aviation",
     "jobs.geisinger.org": "Geisinger",
     "apollomedflightcareers.com": "Apollo MedFlight",
-    "careers.smartrecruiters.com": "Canadian Helicopters",
-    "jobs.smartrecruiters.com": "Canadian Helicopters",
 }
 
-# Source URL overrides: fixes generic ATS domains (Workable/Salesforce/Jobvite/Greenhouse etc.)
+# Fix “generic ATS domain” employers
 EMPLOYER_SOURCE_OVERRIDES: List[Tuple[str, str]] = [
     ("https://apply.workable.com/billings-flying-service/", "Billings Flying Service"),
     ("https://gama-aviation.my.salesforce-sites.com/", "Gama Aviation"),
@@ -78,32 +80,23 @@ ATS_HINTS = [
     "jobtoolz.com",
     "smartrecruiters.com",
     "greenhouse.io",
-    "lever.co",
     "workable.com",
     "salesforce-sites.com",
     "jobvite.com",
+    "jobs.geisinger.org",
 ]
 
-PDF_EXT = ".pdf"
-
 
 # =====================
-# BLOCKLISTS (block corp + safety/quality + fixed wing)
+# BLOCKLISTS
 # =====================
 CORPORATE_BLOCK_KEYWORDS = [
-    # finance/accounting
     "finance", "financial", "accounting", "accountant", "payroll", "tax", "treasury",
-    # HR / recruiting
     "hr", "human resources", "recruiter", "recruiting", "talent acquisition", "people operations",
-    # marketing/sales
     "marketing", "brand", "social media", "content", "sales", "business development", "account executive",
-    # legal
     "legal", "attorney", "paralegal", "counsel",
-    # IT / software
     "information technology", "software", "developer", "data analyst", "product manager",
-    # admin/customer service
     "admin", "administrator", "office manager", "administrative", "customer service", "call center",
-    # safety/quality/compliance (blocked)
     "compliance", "compliant", "governance",
     "safety", "qhse", "hse", "qms", "quality", "sms", "risk", "audit", "assurance",
 ]
@@ -116,9 +109,7 @@ FIXED_WING_BLOCK_KEYWORDS = [
     "embraer", "phenom", "boeing", "airbus",
     "a320", "a321", "a330", "a350", "b737", "737", "b747", "b757", "b767", "b777", "b787",
     "flight attendant", "cabin crew", "ramp agent", "gate agent",
-    "airframe and powerplant", "airframe & powerplant",
     "aircraft mechanic", "aircraft maintenance", "airframe", "powerplant",
-    "fbo"
 ]
 
 ROTOR_OVERRIDE_KEYWORDS = [
@@ -196,12 +187,11 @@ def titlecase_slug(slug: str) -> str:
 def employer_for_source(url: str) -> str:
     u = (url or "").strip()
 
-    # 1) exact prefix overrides
     for prefix, name in EMPLOYER_SOURCE_OVERRIDES:
         if u.startswith(prefix):
             return name
 
-    # 2) Workable: derive employer from org slug (prevents "Workable" as employer)
+    # Workable: prevent "Workable" as employer
     try:
         p = urlparse(u)
         host = (p.netloc or "").lower().replace("www.", "")
@@ -292,7 +282,7 @@ def is_http_url(u: str) -> bool:
 
 
 def strip_tracking(url: str) -> str:
-    """Stable GUID: lowercase host, remove query + fragment, remove trailing slash."""
+    """Stable GUID: remove query/fragment, lowercase host, remove trailing slash."""
     try:
         p = urlparse(url)
         scheme = (p.scheme or "https").lower()
@@ -378,7 +368,6 @@ def is_likely_job_link(url: str) -> bool:
     u = (url or "").strip()
     if not u or not is_http_url(u):
         return False
-
     ul = u.lower()
 
     if ul.startswith(("mailto:", "tel:", "javascript:")):
@@ -408,21 +397,29 @@ def is_likely_job_link(url: str) -> bool:
     if "jobs.heliservice.de" in ul:
         return "id=" in ul
 
-    # SmartRecruiters job detail pages are on jobs.smartrecruiters.com
+    # Greenhouse job board
+    if "greenhouse.io" in ul:
+        return "/jobs/" in ul or "/job/" in ul
+
+    # Jobvite (detail pages are /job/...)
+    if "jobs.jobvite.com" in ul:
+        return "/job/" in ul or "/job/" in ul
+
+    # SmartRecruiters
     if "jobs.smartrecruiters.com" in ul:
         return True
 
-    # Other ATS are allowed but may require fallback
+    # Other ATS: allow
     if any(h in ul for h in ATS_HINTS):
         return True
 
-    # Safety default: only keep obvious job/career links
     return any(x in ul for x in ["/job", "/jobs", "/career", "/careers", "requisition", "vacancy", "vacancies"])
 
 
 def collect_job_links_from_page(base_url: str, html_content: str) -> List[str]:
     soup = BeautifulSoup(html_content, "lxml")
     links: List[str] = []
+
     for a in soup.find_all("a", href=True):
         href = (a.get("href") or "").strip()
         if not href:
@@ -430,6 +427,11 @@ def collect_job_links_from_page(base_url: str, html_content: str) -> List[str]:
         full = urljoin(base_url, href)
         if is_http_url(full) and is_likely_job_link(full):
             links.append(full)
+
+    # SmartRecruiters careers pages often hide links; also regex-scan raw HTML for jobs.smartrecruiters.com links
+    if "careers.smartrecruiters.com" in base_url.lower():
+        for m in re.findall(r"https?://jobs\.smartrecruiters\.com/[A-Za-z0-9_-]+/[A-Za-z0-9_-]+", html_content):
+            links.append(m)
 
     # unique preserve order
     seen = set()
@@ -587,12 +589,14 @@ def scrub_store(store: Dict[str, Dict]) -> Dict[str, Dict]:
     for guid, job in store.items():
         if not job.get("apply_url"):
             job["apply_url"] = job.get("source_url", guid)
+
         if not is_valid_job(job):
             continue
         if is_fixed_wing_job(job.get("title", ""), job.get("description", "")):
             continue
         if is_blocked_corporate(job.get("title", ""), job.get("description", "")):
             continue
+
         cleaned[guid] = job
     return cleaned
 
@@ -755,7 +759,10 @@ def main():
     save_store(store)
 
     items = list(store.values())
-    items.sort(key=lambda j: (parse_iso(j.get("first_seen", "")) or datetime.min.replace(tzinfo=timezone.utc)), reverse=True)
+    items.sort(
+        key=lambda j: (parse_iso(j.get("first_seen", "")) or datetime.min.replace(tzinfo=timezone.utc)),
+        reverse=True
+    )
 
     xml = build_feed(items)
     with open(OUT_XML, "w", encoding="utf-8") as f:
