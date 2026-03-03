@@ -34,3 +34,5 @@ https://workforcenow.adp.com/mascsr/default/mdf/recruitment/recruitment.html?cid
 # ADP (other employers)
 https://workforcenow.adp.com/mascsr/default/mdf/recruitment/recruitment.html?cid=ca9acafc-c72a-4477-94e5-f00db66b65b6&ccId=19000101_000001&lang=en_US
 https://workforcenow.adp.com/mascsr/default/mdf/recruitment/recruitment.html?cid=6fd3b46c-43dd-44a2-9cfc-105047c7227d&lang=en_US
+
+https://careers.smartrecruiters.com/CanadianHelicopters
