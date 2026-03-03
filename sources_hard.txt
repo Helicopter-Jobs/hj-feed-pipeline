@@ -12,7 +12,7 @@ https://nhv-group.jobtoolz.com/en
 # Castle Air
 https://castleair.co.uk/careers/
 
-# CHC (iCIMS tenants) — do NOT use the marketing “working-here” page
+# CHC (iCIMS tenants)
 https://careers-chccrew.icims.com/jobs/search?ss=1
 https://careers-chc.icims.com/jobs/search?ss=1
 
@@ -33,3 +33,12 @@ https://jobs.jobvite.com/ornge
 
 # Life Link III (Greenhouse)
 https://job-boards.greenhouse.io/lifelinkiii
+
+# Canadian Helicopters (SmartRecruiters careers page)
+https://careers.smartrecruiters.com/CanadianHelicopters
+
+# Geisinger (EMS hub — catches pilots/aircrew/clinical/mech/dispatch)
+https://jobs.geisinger.org/ems
+
+# Apollo MedFlight (direct page with current openings)
+https://www.apollomedflightcareers.com/current-positions
