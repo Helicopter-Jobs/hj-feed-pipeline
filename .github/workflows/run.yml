@@ -1,4 +1,4 @@
-name: Build JBoard XML feed
+name: Build JBoard XML feed (EASY)
 
 on:
   workflow_dispatch:
@@ -39,14 +39,18 @@ jobs:
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           SOURCES_FILE: sources_easy.txt
+          MAX_JOB_LINKS_PER_SOURCE: "40"
+          MAX_TOTAL_JOBS: "300"
+          REQUEST_DELAY_SECONDS: "0.7"
+          REQUEST_DELAY_JITTER: "0.5"
         run: |
           python scrape.py
 
-      - name: Commit updated feed.xml
+      - name: Commit updated feed.xml + jobs.json (easy)
         run: |
           git config user.name "hj-feed-bot"
           git config user.email "hj-feed-bot@users.noreply.github.com"
-          git add feed.xml
-          git commit -m "Update feed.xml" || echo "No changes"
+          git add feed.xml jobs.json
+          git commit -m "Update feed (easy)" || echo "No changes"
           git pull --rebase origin main
           git push
