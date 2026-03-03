@@ -63,6 +63,7 @@ EMPLOYER_SOURCE_OVERRIDES: List[Tuple[str, str]] = [
     ("https://gama-aviation.my.salesforce-sites.com/", "Gama Aviation"),
     # Coulson ADP WorkforceNow (your provided source)
     ("https://workforcenow.adp.com/mascsr/default/mdf/recruitment/recruitment.html?cid=92144dc3-94dc-44b9-8a18-90099bf3a77c", "Coulson Aviation"),
+    ("https://careers.smartrecruiters.com/CanadianHelicopters", "Canadian Helicopters"),
 ]
 
 ATS_HINTS = [
