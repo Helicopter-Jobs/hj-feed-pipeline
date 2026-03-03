@@ -1,4 +1,4 @@
-name: Build JBoard XML feed (EASY)
+name: Build JBoard XML feed (EASY + HARD)
 
 on:
   workflow_dispatch:
@@ -15,7 +15,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 75
 
     steps:
       - name: Checkout repo
@@ -35,7 +35,7 @@ jobs:
           pip install playwright beautifulsoup4 lxml requests pdfminer.six
           python -m playwright install --with-deps chromium
 
-      - name: Build feed.xml (easy)
+      - name: Run EASY sources
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           SOURCES_FILE: sources_easy.txt
@@ -46,11 +46,22 @@ jobs:
         run: |
           python scrape.py
 
-      - name: Commit updated feed.xml + jobs.json (easy)
+      - name: Run HARD sources
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          SOURCES_FILE: sources_hard.txt
+          MAX_JOB_LINKS_PER_SOURCE: "80"
+          MAX_TOTAL_JOBS: "600"
+          REQUEST_DELAY_SECONDS: "1.0"
+          REQUEST_DELAY_JITTER: "0.8"
+        run: |
+          python scrape.py
+
+      - name: Commit updated feed.xml + jobs.json
         run: |
           git config user.name "hj-feed-bot"
           git config user.email "hj-feed-bot@users.noreply.github.com"
           git add feed.xml jobs.json
-          git commit -m "Update feed (easy)" || echo "No changes"
+          git commit -m "Update feed" || echo "No changes"
           git pull --rebase origin main
           git push
