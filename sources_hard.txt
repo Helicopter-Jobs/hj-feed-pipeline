@@ -12,27 +12,24 @@ https://nhv-group.jobtoolz.com/en
 # Castle Air
 https://castleair.co.uk/careers/
 
-# CHC (iCIMS tenants)
+# CHC (iCIMS tenants) — do NOT use the marketing “working-here” page
 https://careers-chccrew.icims.com/jobs/search?ss=1
 https://careers-chc.icims.com/jobs/search?ss=1
 
 # Babcock
 https://jobs.babcockinternational.com/Babcock/search/
 
-# Hillsboro
+# Hillsboro Aviation
 https://www.hillsboroaviation.com/careers/
 
-# Workable
+# Billings Flying Service (Workable)
 https://apply.workable.com/billings-flying-service/
 
 # Gama (Salesforce)
 https://gama-aviation.my.salesforce-sites.com/Recruit/fRecruit__ApplyJobList
 
-# ADP (Coulson Aviation)
-https://workforcenow.adp.com/mascsr/default/mdf/recruitment/recruitment.html?cid=92144dc3-94dc-44b9-8a18-90099bf3a77c&ccId=19000101_000001&type=JS&lang=en_US
+# Ornge (Jobvite)
+https://jobs.jobvite.com/ornge
 
-# ADP (other employers)
-https://workforcenow.adp.com/mascsr/default/mdf/recruitment/recruitment.html?cid=ca9acafc-c72a-4477-94e5-f00db66b65b6&ccId=19000101_000001&lang=en_US
-https://workforcenow.adp.com/mascsr/default/mdf/recruitment/recruitment.html?cid=6fd3b46c-43dd-44a2-9cfc-105047c7227d&lang=en_US
-
-https://careers.smartrecruiters.com/CanadianHelicopters
+# Life Link III (Greenhouse)
+https://job-boards.greenhouse.io/lifelinkiii
