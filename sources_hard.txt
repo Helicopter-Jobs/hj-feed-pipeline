@@ -1,14 +1,33 @@
-https://allcareers-quanta.icims.com/jobs/search?ss=1&searchKeyword=%22pj+helicopters%22&searchCategory=33482
-https://allcareers-quanta.icims.com/jobs/search?ss=1&searchKeyword=%22pj+helicopters%22&searchCategory=35583
+# PJ Helicopters (Quanta iCIMS tenant) — use careers-quanta (NOT allcareers-quanta)
+https://careers-quanta.icims.com/jobs/search?ss=1&searchKeyword=%22pj%20helicopters%22&searchCategory=33482
+https://careers-quanta.icims.com/jobs/search?ss=1&searchKeyword=%22pj%20helicopters%22&searchCategory=35583
+
+# Bristow (Workday)
 https://bristow.wd1.myworkdayjobs.com/Careers/jobs?jobFamilyGroup=5ea31b337d684a0d9feb04b82fff0b30&jobFamilyGroup=022eba9bbb674793b4d75979e8cb5fb8
+
+# NHV (Jobtoolz)
 https://nhv-group.jobtoolz.com/en#vacatures
+
+# Castle Air
 https://castleair.co.uk/careers/
-https://workforcenow.adp.com/mascsr/default/mdf/recruitment/recruitment.html?cid=92144dc3-94dc-44b9-8a18-90099bf3a77c&ccId=19000101_000001&type=JS&lang=en_US
-https://www.chcheli.com/working-here
+
+# CHC (iCIMS tenants) — do NOT use the marketing “working-here” page
+https://careers-chccrew.icims.com/jobs/search?ss=1
+https://careers-chc.icims.com/jobs/search?ss=1
+
+# Babcock (big portal — keep caps on)
 https://jobs.babcockinternational.com/Babcock/search/
-https://workforcenow.adp.com/mascsr/default/mdf/recruitment/recruitment.html?cid=1435c475-68bf-4cec-ba97-05268c19c431&amp;jobId=561729&amp;lang=en_US
-https://workforcenow.adp.com/mascsr/default/mdf/recruitment/recruitment.html?cid=6fd3b46c-43dd-44a2-9cfc-105047c7227d
-https://careers-chccrew.icims.com/jobs/search?hashed=-626007793&mobile=false&width=1466&height=500&bga=true&needsRedirect=false&jan1offset=0&jun1offset=60
+
+# Hillsboro Aviation (mixed fleet — filters will block fixed-wing)
+https://www.hillsboroaviation.com/careers/
+
+# Workable
 https://apply.workable.com/billings-flying-service/
+
+# Gama (Salesforce — JS heavy)
 https://gama-aviation.my.salesforce-sites.com/Recruit/fRecruit__ApplyJobList
-https://www.gulfhelicopters.com/en/careers
+
+# ADP Workforce Now (JS heavy — treat as HARD)
+https://workforcenow.adp.com/mascsr/default/mdf/recruitment/recruitment.html?cid=ca9acafc-c72a-4477-94e5-f00db66b65b6&ccId=19000101_000001&lang=en_US
+https://workforcenow.adp.com/mascsr/default/mdf/recruitment/recruitment.html?cid=92144dc3-94dc-44b9-8a18-90099bf3a77c&ccId=19000101_000001&type=JS&lang=en_US
+https://workforcenow.adp.com/mascsr/default/mdf/recruitment/recruitment.html?cid=6fd3b46c-43dd-44a2-9cfc-105047c7227d&lang=en_US
