@@ -5,8 +5,8 @@ import json
 import html
 import random
 from datetime import datetime, timezone, timedelta
-from typing import Dict, List, Optional, Set
-from urllib.parse import urlparse, urljoin
+from typing import Dict, List, Optional, Set, Tuple
+from urllib.parse import urlparse, urljoin, urlencode, parse_qs
 
 import requests
 from bs4 import BeautifulSoup
@@ -54,15 +54,15 @@ EMPLOYER_MAP = {
     "careers-chccrew.icims.com": "CHC",
     "careers-chc.icims.com": "CHC",
     "jobs.papillon.com": "Papillon",
-    "coulsonaviation.com": "Coulson Aviation",
     "hillsboroaviation.com": "Hillsboro Aviation",
 }
 
-# Source URL overrides: fixes generic ATS domains (Workable/Salesforce/etc.)
-EMPLOYER_SOURCE_OVERRIDES = [
+# Source URL overrides: fixes generic ATS domains (Workable/Salesforce/ADP/etc.)
+EMPLOYER_SOURCE_OVERRIDES: List[Tuple[str, str]] = [
     ("https://apply.workable.com/billings-flying-service/", "Billings Flying Service"),
     ("https://gama-aviation.my.salesforce-sites.com/", "Gama Aviation"),
-    ("https://coulsonaviation.com/", "Coulson Aviation"),
+    # Coulson ADP WorkforceNow (your provided source)
+    ("https://workforcenow.adp.com/mascsr/default/mdf/recruitment/recruitment.html?cid=92144dc3-94dc-44b9-8a18-90099bf3a77c", "Coulson Aviation"),
 ]
 
 ATS_HINTS = [
@@ -182,11 +182,35 @@ def employer_for_domain(dom: str) -> str:
     return dom or "Unknown"
 
 
+def titlecase_slug(slug: str) -> str:
+    slug = (slug or "").strip().strip("/")
+    if not slug:
+        return ""
+    parts = [p for p in slug.split("-") if p]
+    return " ".join([p.capitalize() for p in parts])
+
+
 def employer_for_source(url: str) -> str:
     u = (url or "").strip()
+
+    # 1) exact prefix overrides
     for prefix, name in EMPLOYER_SOURCE_OVERRIDES:
         if u.startswith(prefix):
             return name
+
+    # 2) Workable: derive employer from org slug (prevents "Workable" as employer)
+    try:
+        p = urlparse(u)
+        host = (p.netloc or "").lower().replace("www.", "")
+        if host == "apply.workable.com":
+            slug = (p.path or "/").strip("/").split("/")[0]
+            name = titlecase_slug(slug)
+            if name:
+                return name
+    except Exception:
+        pass
+
+    # 3) default domain map
     return employer_for_domain(domain_from_url(u))
 
 
@@ -383,15 +407,45 @@ def is_likely_job_link(url: str) -> bool:
     if "jobs.heliservice.de" in ul:
         return "id=" in ul
 
-    # Workable
+    # Workable (keep all, we filter later)
     if "apply.workable.com" in ul:
         return True
 
-    # Other ATS are allowed but may fall back to parsing the page
+    # ADP / Salesforce etc. (we may build job links via fallback)
     if any(h in ul for h in ATS_HINTS):
         return True
 
     return False
+
+
+def collect_adp_job_links(base_url: str, html_content: str) -> List[str]:
+    """
+    ADP WorkforceNow often embeds job IDs without clean <a> tags.
+    Extract jobId=#### and generate detail URLs.
+    """
+    bu = (base_url or "")
+    if "workforcenow.adp.com" not in bu.lower():
+        return []
+
+    # Find jobId values in the rendered HTML
+    ids = list(dict.fromkeys(re.findall(r"jobId=(\d+)", html_content)))  # unique preserve order
+    if not ids:
+        return []
+
+    # Create a base that can accept &jobId=...
+    # Keep existing query params (cid/ccId/lang/type)
+    p = urlparse(bu.split("#")[0])
+    q = parse_qs(p.query)
+
+    # Ensure required params exist; if missing, still proceed
+    def build_url(job_id: str) -> str:
+        qq = {k: v[:] for k, v in q.items()}
+        qq["jobId"] = [job_id]
+        query = urlencode({k: vv[0] if isinstance(vv, list) else vv for k, vv in qq.items()}, doseq=False)
+        return f"{p.scheme}://{p.netloc}{p.path}?{query}"
+
+    links = [build_url(jid) for jid in ids]
+    return links[:MAX_JOB_LINKS_PER_SOURCE]
 
 
 def collect_job_links_from_page(base_url: str, html_content: str) -> List[str]:
@@ -405,6 +459,10 @@ def collect_job_links_from_page(base_url: str, html_content: str) -> List[str]:
         if is_http_url(full) and is_likely_job_link(full):
             links.append(full)
 
+    # Add ADP-derived job links (if any)
+    links.extend(collect_adp_job_links(base_url, html_content))
+
+    # unique preserve order
     seen = set()
     out = []
     for l in links:
@@ -675,6 +733,7 @@ def main():
             links = collect_job_links_from_page(src, listing_html)
             print(f"  Found {len(links)} candidate job links")
 
+            # If no links found, fall back to parsing the listing page itself as a "single job"
             if not links:
                 links = [src]
 
@@ -708,6 +767,7 @@ def main():
                     if not job or not is_valid_job(job):
                         continue
 
+                    # Filters
                     if is_fixed_wing_job(job.get("title", ""), job.get("description", "")):
                         continue
                     if is_blocked_corporate(job.get("title", ""), job.get("description", "")):
